@@ -64,6 +64,9 @@ router.post("/:id/invoice/regenerate", authMiddleware as any, OrderController.re
 // POST /api/orders/:id/settle-island
 router.post("/:id/settle-island", OrderController.settleOrderInIsland);
 
+// PATCH /api/orders/:id/web-managed — pedido de la tienda online marcado como gestionado
+router.patch("/:id/web-managed", authMiddleware as any, OrderController.markWebOrderManaged);
+
 // PUT /api/orders/:id/return
 router.put("/:id/return", authMiddleware as any, OrderController.returnOrder);
 
