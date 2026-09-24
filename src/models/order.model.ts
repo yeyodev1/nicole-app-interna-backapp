@@ -50,6 +50,10 @@ export interface IWebOrder {
   paymentStatus?: "PAID" | "PENDING_VERIFICATION";
   paymentReference?: string;
   deliveryReference?: string;
+  /** Km en ruta desde la sucursal de salida (solo delivery). */
+  deliveryKm?: number;
+  /** Sucursal de salida que eligió la tienda (solo delivery). */
+  originBranch?: string;
   receivedAt?: Date;
   managedAt?: Date;
   managedBy?: string;
@@ -284,6 +288,8 @@ const OrderSchema = new Schema<IOrder>(
       paymentStatus: { type: String, enum: ["PAID", "PENDING_VERIFICATION"] },
       paymentReference: { type: String },
       deliveryReference: { type: String },
+      deliveryKm: { type: Number },
+      originBranch: { type: String },
       receivedAt: { type: Date },
       managedAt: { type: Date },
       managedBy: { type: String },
