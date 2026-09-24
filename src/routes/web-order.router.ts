@@ -13,6 +13,9 @@ router.use(webOrdersApiKeyMiddleware);
 // GET /api/web-orders/contifico-products?q=
 router.get("/contifico-products", WebOrderController.searchContificoProducts);
 
+// GET /api/web-orders/status?externalIds=a,b,c (solo lectura, máx. 100)
+router.get("/status", WebOrderController.getWebOrderStatuses);
+
 // POST /api/web-orders
 router.post("/", WebOrderController.createWebOrder);
 
