@@ -423,3 +423,65 @@ export async function searchContificoProducts(req: Request, res: Response, next:
     return;
   }
 }
+
+const MAX_STATUS_IDS = 100;
+
+/**
+ * GET /api/web-orders/status?externalIds=a,b,c
+ * Solo lectura: la tienda consulta en qué va cada pedido para avisarle al cliente.
+ * Proyección mínima (nada de clientes, montos ni facturas). Los que no existen no vienen.
+ */
+export async function getWebOrderStatuses(req: Request, res: Response, next: NextFunction) {
+  try {
+    const raw = Array.isArray(req.query.externalIds)
+      ? req.query.externalIds.join(",")
+      : String(req.query.externalIds ?? "");
+    const externalIds = [...new Set(raw.split(",").map((id) => id.trim()).filter(Boolean))];
+
+    if (externalIds.length === 0) {
+      res.status(HttpStatusCode.BadRequest).send({ message: "externalIds es obligatorio (separados por coma)." });
+      return;
+    }
+    if (externalIds.length > MAX_STATUS_IDS) {
+      res.status(HttpStatusCode.BadRequest).send({ message: `Máximo ${MAX_STATUS_IDS} externalIds por consulta.` });
+      return;
+    }
+
+    const orders: any[] = await models.orders
+      .find(
+        { "webOrder.externalId": { $in: externalIds } },
+        {
+          _id: 0,
+          "webOrder.externalId": 1,
+          "webOrder.paymentStatus": 1,
+          status: 1,
+          productionStage: 1,
+          dispatchStatus: 1,
+          voidedAt: 1,
+          deliveryType: 1,
+          branch: 1,
+          updatedAt: 1,
+        },
+      )
+      .lean();
+
+    const results = orders.map((o) => ({
+      externalId: o.webOrder?.externalId,
+      ...(o.status ? { status: o.status } : {}),
+      ...(o.productionStage ? { productionStage: o.productionStage } : {}),
+      ...(o.dispatchStatus ? { dispatchStatus: o.dispatchStatus } : {}),
+      ...(o.webOrder?.paymentStatus ? { paymentStatus: o.webOrder.paymentStatus } : {}),
+      ...(o.voidedAt ? { voidedAt: new Date(o.voidedAt).toISOString() } : {}),
+      deliveryType: o.deliveryType,
+      ...(o.branch ? { branch: o.branch } : {}),
+      updatedAt: o.updatedAt ? new Date(o.updatedAt).toISOString() : undefined,
+    }));
+
+    res.status(HttpStatusCode.Ok).send(results);
+    return;
+  } catch (error) {
+    console.error("❌ [web-orders] Error leyendo estados:", error);
+    res.status(HttpStatusCode.InternalServerError).send({ message: "Error interno al leer los estados de pedidos web." });
+    return;
+  }
+}
