@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 560" width="960" height="560" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <rect width="960" height="560" rx="18" fill="#111"/>
+  <!-- barra del navegador -->
+  <circle cx="30" cy="26" r="6" fill="#ff5f57"/><circle cx="50" cy="26" r="6" fill="#febc2e"/><circle cx="70" cy="26" r="6" fill="#28c840"/>
+  <rect x="100" y="14" width="760" height="24" rx="12" fill="#222"/>
+  <text x="118" y="31" font-size="12" fill="#9a9a9a">vercel.com/proyectos-de-diego/nicole-app-interna-backapp/settings/environment-variables</text>
+
+  <!-- tabs -->
+  <text x="30" y="80" font-size="13" fill="#9a9a9a">Overview</text>
+  <text x="110" y="80" font-size="13" fill="#9a9a9a">Deployments</text>
+  <text x="210" y="80" font-size="13" fill="#9a9a9a">Logs</text>
+  <text x="260" y="80" font-size="13" fill="#fff" font-weight="600">Settings</text>
+  <rect x="256" y="88" width="64" height="2" fill="#fff"/>
+  <rect x="0" y="92" width="960" height="1" fill="#2a2a2a"/>
+
+  <!-- sidebar -->
+  <text x="30" y="130" font-size="13" fill="#9a9a9a">General</text>
+  <text x="30" y="158" font-size="13" fill="#9a9a9a">Domains</text>
+  <rect x="20" y="170" width="180" height="28" rx="6" fill="#262626"/>
+  <text x="30" y="189" font-size="13" fill="#fff" font-weight="600">Environment Variables</text>
+  <text x="30" y="218" font-size="13" fill="#9a9a9a">Git</text>
+
+  <!-- panel -->
+  <text x="240" y="132" font-size="20" font-weight="700" fill="#fff">Environment Variables</text>
+  <text x="240" y="154" font-size="12" fill="#9a9a9a">Production · Preview · Development</text>
+
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13">
+    <rect x="240" y="172" width="690" height="44" rx="8" fill="#1d1a10" stroke="#e0a526"/>
+    <text x="256" y="199" fill="#ffd27a">CONTIFICO_API_KEY</text><text x="560" y="199" fill="#777">••••••••••••••••</text>
+    <rect x="240" y="222" width="690" height="44" rx="8" fill="#1d1a10" stroke="#e0a526"/>
+    <text x="256" y="249" fill="#ffd27a">CONTIFICO_TOKEN</text><text x="560" y="249" fill="#777">••••••••••••••••</text>
+    <rect x="240" y="272" width="690" height="44" rx="8" fill="#1a1a1a" stroke="#333"/>
+    <text x="256" y="299" fill="#ddd">CONTIFICO_POS_ID</text><text x="560" y="299" fill="#777">••••••••••••••••</text>
+    <rect x="240" y="322" width="690" height="44" rx="8" fill="#1a1a1a" stroke="#333"/>
+    <text x="256" y="349" fill="#ddd">CONTIFICO_CUENTA_BANCARIA_TRA</text><text x="560" y="349" fill="#777">••••••••••••••••</text>
+    <rect x="240" y="372" width="690" height="44" rx="8" fill="#1a1a1a" stroke="#333"/>
+    <text x="256" y="399" fill="#ddd">DB_URI</text><text x="560" y="399" fill="#777">••••••••••••••••</text>
+  </g>
+  <text x="910" y="199" font-size="16" fill="#9a9a9a" text-anchor="end">⋯</text>
+  <text x="910" y="249" font-size="16" fill="#9a9a9a" text-anchor="end">⋯</text>
+
+  <!-- anotaciones -->
+  <circle cx="220" cy="185" r="14" fill="#e0a526"/><text x="220" y="190" font-size="14" font-weight="700" fill="#111" text-anchor="middle">1</text>
+  <text x="240" y="445" font-size="14" fill="#fff"><tspan font-weight="700" fill="#ffd27a">① Settings → Environment Variables.</tspan> Busca las que empiezan con CONTIFICO_</text>
+  <text x="240" y="472" font-size="14" fill="#fff"><tspan font-weight="700" fill="#ffd27a">② ⋯ → Edit</tspan> en cada una, pega el valor nuevo, marca los 3 entornos y <tspan font-weight="700">Save</tspan>.</text>
+  <text x="240" y="499" font-size="14" fill="#fff"><tspan font-weight="700" fill="#ffd27a">③ Deployments → ⋯ del último → Redeploy.</tspan> Sin este paso la app sigue con las llaves viejas.</text>
+  <text x="240" y="532" font-size="12" fill="#9a9a9a">Ilustración: los valores reales nunca se muestran aquí ni se suben al repo.</text>
+</svg>
