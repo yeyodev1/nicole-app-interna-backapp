@@ -51,6 +51,7 @@ All routes are mounted under `/api` prefix. The flow is:
 | `/provider-categories` | Supplier categorization |
 | `/warehouse` | Warehouse/stock movements |
 | `/sellers` | Vendedores asignables a la factura (comisiones) |
+| `/web-orders` | Pedidos de la tienda online (sin JWT, header `x-api-key` = `WEB_ORDERS_API_KEY`) |
 
 ### Layered Structure
 
@@ -68,12 +69,15 @@ All routes are mounted under `/api` prefix. The flow is:
 - **Vendedor en la factura** — `resolveVendedorPayload()` mapea el pedido a una persona `es_vendedor` de Contífico (catálogo `Seller`, expuesto en `/api/sellers`) y lo envía como `vendedor_id`. Es la base del reporte de comisiones.
 - **Catálogo de vendedores** — `sellers` se siembra desde las personas `es_vendedor` de cada cuenta con `pnpm seed:sellers -- --source <nicole|sucree>`. `createOrder` valida la cédula filtrando por `contificoSource`, así que un vendedor de Nicole en un pedido de Sucree devuelve 400; el selector del frontend filtra por la cuenta del carrito.
 - **Precio con IVA incluido** — Los productos listados en `src/config/precio-final.config.ts` (Delivery y la Torta Personalizada de Sucree, `TORT-001`) se cotizan a precio final: la base se calcula hacia atrás (`precio / 1.15`) y el total de la factura da exactamente el valor tecleado. El frontend replica la lista en `src/constants/pricing.ts`.
+- **Pedidos de la tienda online** — La tienda (nicole-tienda-backapp) llama `POST /api/web-orders` (idempotente por `webOrder.externalId`), `PATCH /api/web-orders/:externalId/payment` y `GET /api/web-orders/contifico-products?q=`, autenticada con `x-api-key` (`webOrdersApiKey.middleware.ts`, comparación en tiempo constante). El pedido se crea con `salesChannel`/`responsible` = "Tienda Online", `status: "PENDIENTE_GESTION"` y el subdocumento `webOrder`; los precios se guardan sin IVA (`precio / 1.15`) salvo los de precio final. No se toca `invoiceStatus`: se factura como cualquier pedido. El equipo lo cierra con `PATCH /api/orders/:id/web-managed` (JWT) → `status: "GESTIONADO"`. `GET /api/orders?webPending=true` lista los pendientes (también para SALES_REP) y `salesChannel=` filtra por canal. Contrato: `docs/api-contract.md` del backapp de la tienda.
 - **File uploads** — Multer middleware saves to `uploads/` dir with unique filenames (100MB limit, max 10 files)
 - **Startup** — `index.ts` connects to MongoDB, seeds default users, then starts the HTTP server (10min timeout)
 
 ### Environment Variables
 
 Required: `DB_URI`, `JWT_SECRET`, `CONTIFICO_API_KEY`, `CONTIFICO_TOKEN`. Check `.env` for additional keys (Cloudinary, Resend, Google AI, OpenAI, Firebase).
+
+Optional, integración con la tienda online: `WEB_ORDERS_API_KEY=` (clave compartida para `/api/web-orders`; sin ella esas rutas responden 503).
 
 Optional, punto de emisión de facturas (`src/config/contifico-emision.config.ts`):
 `CONTIFICO_ESTABLECIMIENTO` (default `001`), `CONTIFICO_PUNTO_EMISION` (default `001` = Matriz / CDP),
