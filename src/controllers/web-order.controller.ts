@@ -77,6 +77,12 @@ function validateWebOrderBody(body: any): string[] {
   if (body.deliveryValue !== undefined && (!isFiniteNumber(body.deliveryValue) || body.deliveryValue < 0)) {
     errors.push("deliveryValue debe ser un número mayor o igual a 0.");
   }
+  if (body.deliveryKm !== undefined && body.deliveryKm !== null && (!isFiniteNumber(body.deliveryKm) || body.deliveryKm < 0)) {
+    errors.push("deliveryKm debe ser un número mayor o igual a 0.");
+  }
+  if (body.originBranch !== undefined && body.originBranch !== null && typeof body.originBranch !== "string") {
+    errors.push("originBranch debe ser texto.");
+  }
 
   if (!Array.isArray(body.products) || body.products.length === 0) {
     errors.push("products debe tener al menos un producto.");
@@ -213,6 +219,13 @@ export async function createWebOrder(req: Request, res: Response, next: NextFunc
     const deliveryReference = optionalString(body.deliveryReference);
     const paymentReference = optionalString(body.paymentReference);
     const paymentMethod = paymentMethodLabel(body.paymentMethod, paymentStatus);
+    // Sucursal de salida y km en ruta que calculó la tienda (solo delivery).
+    const isDelivery = body.deliveryType === "delivery";
+    const originBranch = isDelivery ? optionalString(body.originBranch) : undefined;
+    const deliveryKm = isDelivery && isFiniteNumber(body.deliveryKm) ? body.deliveryKm : undefined;
+    const originLine = originBranch
+      ? `Sale desde ${originBranch}${deliveryKm !== undefined ? ` · ${deliveryKm} km` : ""}`
+      : null;
 
     const commentLines = [
       `Pedido web ${code}`,
@@ -221,6 +234,7 @@ export async function createWebOrder(req: Request, res: Response, next: NextFunc
       `Pago: ${paymentMethod}${paymentReference ? ` · Ref. ${paymentReference}` : ""}`,
       optionalString(body.comments) ? `Notas del cliente: ${String(body.comments).trim()}` : null,
       deliveryReference ? `Referencia de entrega: ${deliveryReference}` : null,
+      originLine,
     ].filter(Boolean);
 
     const auditDetails = [
@@ -270,6 +284,8 @@ export async function createWebOrder(req: Request, res: Response, next: NextFunc
         paymentStatus,
         paymentReference,
         deliveryReference,
+        ...(deliveryKm !== undefined ? { deliveryKm } : {}),
+        ...(originBranch ? { originBranch } : {}),
         receivedAt: now,
       },
     };
@@ -279,6 +295,8 @@ export async function createWebOrder(req: Request, res: Response, next: NextFunc
       if (branch) orderData.branch = branch;
     } else {
       orderData.deliveryAddress = String(body.deliveryAddress).trim();
+      // Así el pedido se lee "Delivery saliendo de <sucursal>" en la app.
+      if (originBranch) orderData.branch = originBranch;
     }
     const googleMapsLink = optionalString(body.googleMapsLink);
     if (googleMapsLink) orderData.googleMapsLink = googleMapsLink;
