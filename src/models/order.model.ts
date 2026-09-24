@@ -37,6 +37,28 @@ export interface IDispatch {
   receptionNotes?: string;
 }
 
+/** Datos propios de un pedido creado desde la tienda online. */
+export interface IWebOrder {
+  /** `_id` de la orden en la tienda. Llave de idempotencia. */
+  externalId: string;
+  /** Código visible para el cliente, ej. "NP-7K2Q9X". */
+  code?: string;
+  customerEmail?: string;
+  customerIdNumber?: string;
+  /** Método de pago tal cual lo manda la tienda: 'Payphone' | 'Transferencia'. */
+  paymentMethod?: string;
+  paymentStatus?: "PAID" | "PENDING_VERIFICATION";
+  paymentReference?: string;
+  deliveryReference?: string;
+  /** Km en ruta desde la sucursal de salida (solo delivery). */
+  deliveryKm?: number;
+  /** Sucursal de salida que eligió la tienda (solo delivery). */
+  originBranch?: string;
+  receivedAt?: Date;
+  managedAt?: Date;
+  managedBy?: string;
+}
+
 export interface IOrder extends Document {
   deliveryPerson?: {
     name: string;
@@ -118,7 +140,9 @@ export interface IOrder extends Document {
     reference?: string;
     status?: string;
   }>;
-  status?: string; // Top level status (e.g. DELIVERED)
+  status?: string; // Top level status (e.g. DELIVERED). Pedidos web: PENDIENTE_GESTION → GESTIONADO
+  /** Sólo en pedidos que llegan de la tienda online (`/api/web-orders`). */
+  webOrder?: IWebOrder;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -254,6 +278,23 @@ const OrderSchema = new Schema<IOrder>(
 
     status: { type: String }, // New top level status
 
+    // Pedido de la tienda online (sólo existe en pedidos creados por /api/web-orders)
+    webOrder: {
+      externalId: { type: String },
+      code: { type: String },
+      customerEmail: { type: String },
+      customerIdNumber: { type: String },
+      paymentMethod: { type: String },
+      paymentStatus: { type: String, enum: ["PAID", "PENDING_VERIFICATION"] },
+      paymentReference: { type: String },
+      deliveryReference: { type: String },
+      deliveryKm: { type: Number },
+      originBranch: { type: String },
+      receivedAt: { type: Date },
+      managedAt: { type: Date },
+      managedBy: { type: String },
+    },
+
     paymentDetails: {
       forma_cobro: String,
       monto: Number,
@@ -282,5 +323,9 @@ const OrderSchema = new Schema<IOrder>(
     versionKey: false,
   }
 );
+
+// Idempotencia de la tienda online: un externalId = un pedido. Sparse para que los
+// pedidos manuales (sin webOrder) no choquen entre sí.
+OrderSchema.index({ "webOrder.externalId": 1 }, { unique: true, sparse: true });
 
 export const OrderModel = model<IOrder>("Order", OrderSchema);

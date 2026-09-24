@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 360" width="960" height="360" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7a6a72"/>
+    </marker>
+  </defs>
+  <rect width="960" height="360" rx="18" fill="#f7f2f0"/>
+  <text x="40" y="48" font-size="20" font-weight="700" fill="#2b1d24">Cómo está armada la app interna</text>
+  <text x="40" y="72" font-size="14" fill="#7a6a72">Dos repos, dos proyectos de Vercel. Contífico sólo lo toca el backend.</text>
+
+  <!-- Usuarios -->
+  <rect x="40" y="130" width="150" height="120" rx="14" fill="#fff" stroke="#e6dadd"/>
+  <text x="115" y="178" font-size="30" text-anchor="middle">👩‍🍳</text>
+  <text x="115" y="212" font-size="14" font-weight="600" text-anchor="middle" fill="#2b1d24">Equipo Nicole</text>
+  <text x="115" y="232" font-size="12" text-anchor="middle" fill="#7a6a72">ventas · producción</text>
+
+  <!-- Frontend -->
+  <rect x="250" y="110" width="210" height="160" rx="14" fill="#fff" stroke="#822a72" stroke-width="2"/>
+  <text x="355" y="142" font-size="12" font-weight="700" text-anchor="middle" fill="#822a72" letter-spacing="1">FRONTAPP</text>
+  <text x="355" y="168" font-size="15" font-weight="600" text-anchor="middle" fill="#2b1d24">Vue 3 + Vite</text>
+  <text x="355" y="196" font-size="13" text-anchor="middle" fill="#2b1d24">app.nicole.com.ec</text>
+  <text x="355" y="222" font-size="11" text-anchor="middle" fill="#7a6a72">nicole-app-interna-frontapp</text>
+  <rect x="270" y="236" width="170" height="22" rx="11" fill="#f3e6f0"/>
+  <text x="355" y="251" font-size="11" text-anchor="middle" fill="#822a72">1 variable: VITE_NICOLE_API</text>
+
+  <!-- Backend -->
+  <rect x="520" y="110" width="210" height="160" rx="14" fill="#fff" stroke="#822a72" stroke-width="2"/>
+  <text x="625" y="142" font-size="12" font-weight="700" text-anchor="middle" fill="#822a72" letter-spacing="1">BACKAPP</text>
+  <text x="625" y="168" font-size="15" font-weight="600" text-anchor="middle" fill="#2b1d24">Express + TypeScript</text>
+  <text x="625" y="196" font-size="13" text-anchor="middle" fill="#2b1d24">API /api/*</text>
+  <text x="625" y="222" font-size="11" text-anchor="middle" fill="#7a6a72">nicole-app-interna-backapp</text>
+  <rect x="555" y="236" width="140" height="22" rx="11" fill="#fdf0d8"/>
+  <text x="625" y="251" font-size="11" text-anchor="middle" fill="#8a5a00">aquí van las llaves 🔑</text>
+
+  <!-- Contifico -->
+  <rect x="790" y="100" width="130" height="80" rx="14" fill="#fff" stroke="#e0a526" stroke-width="2"/>
+  <text x="855" y="134" font-size="15" font-weight="700" text-anchor="middle" fill="#2b1d24">Contífico</text>
+  <text x="855" y="156" font-size="11" text-anchor="middle" fill="#7a6a72">facturas · productos</text>
+  <text x="855" y="170" font-size="11" text-anchor="middle" fill="#7a6a72">clientes · cobros</text>
+
+  <!-- Mongo -->
+  <rect x="790" y="200" width="130" height="80" rx="14" fill="#fff" stroke="#3f9b5a" stroke-width="2"/>
+  <text x="855" y="234" font-size="15" font-weight="700" text-anchor="middle" fill="#2b1d24">MongoDB</text>
+  <text x="855" y="256" font-size="11" text-anchor="middle" fill="#7a6a72">pedidos · usuarios</text>
+  <text x="855" y="270" font-size="11" text-anchor="middle" fill="#7a6a72">bodega · producción</text>
+
+  <line x1="190" y1="190" x2="246" y2="190" stroke="#7a6a72" stroke-width="2" marker-end="url(#a)"/>
+  <line x1="460" y1="190" x2="516" y2="190" stroke="#7a6a72" stroke-width="2" marker-end="url(#a)"/>
+  <line x1="730" y1="170" x2="786" y2="142" stroke="#7a6a72" stroke-width="2" marker-end="url(#a)"/>
+  <line x1="730" y1="210" x2="786" y2="238" stroke="#7a6a72" stroke-width="2" marker-end="url(#a)"/>
+
+  <text x="480" y="320" font-size="13" text-anchor="middle" fill="#7a6a72">Cambiar de cuenta de Contífico = cambiar variables del <tspan font-weight="700" fill="#822a72">backapp</tspan> en Vercel + Redeploy. El frontapp no se toca.</text>
+</svg>

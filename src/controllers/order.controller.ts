@@ -6,6 +6,7 @@ import { models } from "../models";
 import { ContificoService } from "../services/contifico.service";
 import { getECDateRange } from "../utils/date.utils";
 import { AuthRequest } from "../types/AuthRequest";
+import { Types } from "mongoose";
 
 const nicoleContificoService = new ContificoService('nicole');
 const sucreeContificoService = new ContificoService('sucree');
@@ -316,8 +317,13 @@ export async function getOrders(req: AuthRequest, res: Response, next: NextFunct
 
     const query: any = {};
 
+    // Pedidos de la tienda online por gestionar (status PENDIENTE_GESTION).
+    const webPending = req.query.webPending === 'true';
+
     // Data Isolation for Sales Reps
-    if (currentUser && (currentRole === 'SALES_REP' || currentRole === 'SALES')) {
+    // Excepción: los pedidos web pendientes no tienen vendedor (responsible = "Tienda Online"),
+    // así que cualquier vendedor debe poder verlos para tomarlos.
+    if (currentUser && (currentRole === 'SALES_REP' || currentRole === 'SALES') && !webPending) {
       if (currentUser.name) {
         query.responsible = { $regex: new RegExp(`^${currentUser.name}$`, "i") };
       }
@@ -374,6 +380,14 @@ export async function getOrders(req: AuthRequest, res: Response, next: NextFunct
     // 4. Dispatch Status Filter (e.g. RETURNED)
     if (req.query.dispatchStatus) {
       query.dispatchStatus = req.query.dispatchStatus;
+    }
+
+    // 5. Tienda online: pendientes de gestionar y filtro por canal de venta
+    if (webPending) {
+      query.status = 'PENDIENTE_GESTION';
+    }
+    if (typeof req.query.salesChannel === 'string' && req.query.salesChannel) {
+      query.salesChannel = req.query.salesChannel;
     }
 
     // 3. Execution
@@ -748,6 +762,59 @@ export async function updateOrder(req: AuthRequest, res: Response, next: NextFun
     console.error("❌ Error in updateOrder:", error);
     res.status(HttpStatusCode.InternalServerError).send({
       message: "Internal server error while updating order.",
+      error: error instanceof Error ? error.message : String(error)
+    });
+    return;
+  }
+}
+
+/**
+ * Marca un pedido de la tienda online como gestionado por el equipo.
+ * PATCH /api/orders/:id/web-managed
+ */
+export async function markWebOrderManaged(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    const { id } = req.params;
+    if (!Types.ObjectId.isValid(String(id))) {
+      res.status(HttpStatusCode.NotFound).send({ message: "Pedido no encontrado." });
+      return;
+    }
+
+    const order = await models.orders.findById(id);
+    if (!order) {
+      res.status(HttpStatusCode.NotFound).send({ message: "Pedido no encontrado." });
+      return;
+    }
+    if (!order.webOrder?.externalId) {
+      res.status(HttpStatusCode.BadRequest).send({ message: "Este pedido no viene de la tienda online." });
+      return;
+    }
+    if (order.status === 'GESTIONADO') {
+      res.status(HttpStatusCode.Ok).send({ message: "El pedido ya estaba gestionado.", order });
+      return;
+    }
+
+    const userName = req.user?.name || req.user?.email || "Usuario";
+    const now = new Date();
+    order.status = 'GESTIONADO';
+    order.webOrder.managedAt = now;
+    order.webOrder.managedBy = userName;
+    order.markModified('webOrder');
+    order.updatedBy = userName;
+    order.auditLog.push({
+      user: userName,
+      action: "Pedido web gestionado",
+      at: now,
+      details: `Pedido web ${order.webOrder.code || order.webOrder.externalId} marcado como gestionado.`,
+    });
+    await order.save();
+
+    res.status(HttpStatusCode.Ok).send({ message: "Pedido marcado como gestionado.", order });
+    return;
+  } catch (error) {
+    console.error("❌ Error in markWebOrderManaged:", error);
+    res.status(HttpStatusCode.InternalServerError).send({
+      message: "Error interno al marcar el pedido como gestionado.",
       error: error instanceof Error ? error.message : String(error)
     });
     return;
