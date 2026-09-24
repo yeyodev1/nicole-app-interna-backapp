@@ -108,6 +108,7 @@ Sólo si la cuenta nueva es **otra empresa** (otro RUC, otros bancos, otra caja)
 | `FRONTEND_URL` | Links dentro de los correos | — |
 | `CRON_SECRET` | Protege los endpoints que llama el cron de GitHub Actions | — |
 | `METRICS_API_URL` / `METRICS_API_TOKEN` | Métricas de Meta Ads en analytics | — |
+| `WEB_ORDERS_API_KEY` | Clave compartida con la tienda online (header `x-api-key` en `/api/web-orders`). Debe ser igual a `INTERNAL_APP_API_KEY` del backapp de la tienda. Sin ella, `/api/web-orders` responde 503 | — |
 
 ---
 
