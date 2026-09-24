@@ -426,6 +426,13 @@ export async function searchContificoProducts(req: Request, res: Response, next:
 
 const MAX_STATUS_IDS = 100;
 
+/** Fecha ISO o undefined: un dato raro en un pedido no debe tumbar la respuesta de todo el lote. */
+function toIsoOrUndefined(value: unknown): string | undefined {
+  if (!value) return undefined;
+  const date = value instanceof Date ? value : new Date(value as any);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
 /**
  * GET /api/web-orders/status?externalIds=a,b,c
  * Solo lectura: la tienda consulta en qué va cada pedido para avisarle al cliente.
@@ -471,10 +478,11 @@ export async function getWebOrderStatuses(req: Request, res: Response, next: Nex
       ...(o.productionStage ? { productionStage: o.productionStage } : {}),
       ...(o.dispatchStatus ? { dispatchStatus: o.dispatchStatus } : {}),
       ...(o.webOrder?.paymentStatus ? { paymentStatus: o.webOrder.paymentStatus } : {}),
-      ...(o.voidedAt ? { voidedAt: new Date(o.voidedAt).toISOString() } : {}),
+      // voidedAt con valor pero ilegible sigue contando como anulado.
+      ...(o.voidedAt ? { voidedAt: toIsoOrUndefined(o.voidedAt) ?? String(o.voidedAt) } : {}),
       deliveryType: o.deliveryType,
       ...(o.branch ? { branch: o.branch } : {}),
-      updatedAt: o.updatedAt ? new Date(o.updatedAt).toISOString() : undefined,
+      updatedAt: toIsoOrUndefined(o.updatedAt),
     }));
 
     res.status(HttpStatusCode.Ok).send(results);
