@@ -3,7 +3,8 @@ import { CONTIFICO_CUENTA_BANCARIA_TRA } from "../config/contifico-cobro.config"
 import { isPrecioIvaIncluido } from "../config/precio-final.config";
 import { HttpStatusCode } from "axios";
 import { models } from "../models";
-import { ContificoService } from "../services/contifico.service";
+import { ContificoService, assertWebOrderProductsLinked } from "../services/contifico.service";
+import CustomError from "../errors/customError.error";
 import { getECDateRange } from "../utils/date.utils";
 import { AuthRequest } from "../types/AuthRequest";
 import { Types } from "mongoose";
@@ -702,8 +703,14 @@ export async function updateOrder(req: AuthRequest, res: Response, next: NextFun
     if (updateData.totalValue !== undefined) order.totalValue = updateData.totalValue;
 
     // Payment updates
-    if (updateData.paymentDetails) order.paymentDetails = updateData.paymentDetails;
-    if (updateData.payments) order.payments = updateData.payments;
+    // Pedidos web: el formulario de edición manda un paymentDetails por defecto (monto 0)
+    // y no debe pisar el cobro que se registró al verificarse el pago en la tienda.
+    const isWebOrder = !!order.webOrder?.externalId;
+    const keepWebPaymentDetails = isWebOrder && !Number(updateData.paymentDetails?.monto);
+    const keepWebPayments = isWebOrder && Array.isArray(updateData.payments)
+      && updateData.payments.length === 0 && (order.payments || []).length > 0;
+    if (updateData.paymentDetails && !keepWebPaymentDetails) order.paymentDetails = updateData.paymentDetails;
+    if (updateData.payments && !keepWebPayments) order.payments = updateData.payments;
     if (updateData.paymentMethod) order.paymentMethod = updateData.paymentMethod;
 
     // Invoice Data updates (if not processed)
@@ -886,6 +893,17 @@ export async function registerCollection(req: AuthRequest, res: Response, next: 
       status: 'PAID'
     });
 
+    // Pedido de la tienda: si ya quedó cubierto, la tienda lo ve pagado (GET /web-orders/status).
+    if (order.webOrder?.externalId) {
+      const paidTotal = order.payments
+        .filter((p: any) => p.status === 'PAID')
+        .reduce((sum: number, p: any) => sum + (Number(p.monto) || 0), 0);
+      if (paidTotal >= effectiveTotal - 0.10 && order.webOrder.paymentStatus !== 'PAID') {
+        order.webOrder.paymentStatus = 'PAID';
+        order.markModified('webOrder');
+      }
+    }
+
     // Audit Log for Payment
     if (req.user) {
       order.auditLog.push({
@@ -912,8 +930,10 @@ export async function registerCollection(req: AuthRequest, res: Response, next: 
 
     if (!documentId) {
       // Offline/Queued Mode
-      // Ensure invoiceNeeded is true so batch picks it up
-      if (!order.invoiceNeeded) {
+      // Ensure invoiceNeeded is true so batch picks it up.
+      // Pedidos web sin RUC: no se encolan (saldría una factura automática con datos vacíos).
+      const skipAutoInvoice = !!order.webOrder?.externalId && !String(order.invoiceData?.ruc || '').trim();
+      if (!order.invoiceNeeded && !skipAutoInvoice) {
         order.invoiceNeeded = true;
         order.invoiceStatus = "PENDING";
         await order.save();
@@ -1074,6 +1094,13 @@ export async function generateInvoice(req: AuthRequest, res: Response, next: Nex
   } catch (error: any) {
     console.error("Error generating invoice:", error);
 
+    // Validación previa (p. ej. producto web sin código de Contífico): no se llegó a
+    // Contífico, así que la factura no queda en ERROR.
+    if (error instanceof CustomError) {
+      res.status(error.status).send({ message: error.message });
+      return;
+    }
+
     try {
       await models.orders.findByIdAndUpdate(req.params.id, { invoiceStatus: 'ERROR', invoiceError: error.message });
     } catch (e) { }
@@ -1106,6 +1133,9 @@ export async function regenerateInvoice(req: AuthRequest, res: Response, next: N
       res.status(HttpStatusCode.NotFound).send({ message: "Order not found." });
       return;
     }
+
+    // Antes de tocar invoiceInfo: si falla, el documento anterior sigue referenciado.
+    assertWebOrderProductsLinked(order);
 
     const existingDocId = (order as any).invoiceInfo?.id;
     const forceNew = req.query.force === 'true';
@@ -1208,6 +1238,10 @@ export async function regenerateInvoice(req: AuthRequest, res: Response, next: N
 
   } catch (error: any) {
     console.error("Error regenerating invoice:", error);
+    if (error instanceof CustomError) {
+      res.status(error.status).send({ message: error.message });
+      return;
+    }
     try {
       await models.orders.findByIdAndUpdate(req.params.id, { invoiceStatus: 'ERROR', invoiceError: error.message });
     } catch (e) { }
@@ -1388,6 +1422,9 @@ export async function batchReauthorizeInvoices(req: AuthRequest, res: Response, 
     const customerName: string = order.customerName || orderId;
 
     try {
+      // Pedido web con ítems sin código: falla aquí, antes de soltar la referencia al documento.
+      assertWebOrderProductsLinked(order);
+
       // Case A: no invoiceInfo at all → create from scratch
       if (!order.invoiceInfo?.id) {
         order.invoiceStatus = "PENDING";
@@ -1723,7 +1760,9 @@ export async function generateMissingInvoices(req: AuthRequest, res: Response, n
       invoiceNeeded: true,
       invoiceStatus: { $in: [null, undefined, "PENDING"] },
       "invoiceInfo": { $in: [null, undefined] },
-      voidedAt: null
+      voidedAt: null,
+      // Pedidos web que el equipo aún no revisa: se facturan a mano al gestionarlos.
+      status: { $ne: "PENDIENTE_GESTION" }
     });
 
     summary.found = orders.length;
@@ -2069,6 +2108,14 @@ export async function deleteOrder(req: AuthRequest, res: Response, next: NextFun
 
     if (!order) {
       res.status(HttpStatusCode.NotFound).send({ message: "Order not found." });
+      return;
+    }
+
+    // La tienda sigue ese pedido por externalId: borrarlo lo deja huérfano y el cliente sin aviso.
+    if (order.webOrder?.externalId) {
+      res.status(HttpStatusCode.Conflict).send({
+        message: "Los pedidos de la tienda online no se eliminan: anúlalo (se avisa al cliente)"
+      });
       return;
     }
 
