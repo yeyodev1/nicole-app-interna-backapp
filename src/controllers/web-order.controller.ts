@@ -101,13 +101,14 @@ export function queueWebInvoice(order: any) {
  * Sin datos de factura, el pedido web se factura a Consumidor Final (SRI
  * 9999999999999) con el correo del cliente, para que le llegue su comprobante.
  */
-function consumidorFinalInvoiceData(email: string, address: string) {
+function consumidorFinalInvoiceData(email: string, address: string, phone?: string) {
   return {
     ruc: "9999999999999",
     businessName: "Consumidor Final",
     email,
     address: address || "Guayaquil",
     personType: "natural",
+    ...(phone ? { phone } : {}),
   };
 }
 
@@ -308,8 +309,19 @@ export async function createWebOrder(req: Request, res: Response, next: NextFunc
       ? `Sale desde ${originBranch}${deliveryKm !== undefined ? ` · ${deliveryKm} km` : ""}`
       : null;
 
+    // Contrato v7: customerName/customerPhone = quien recibe/retira (motorizado, lista,
+    // WhatsApp); buyer* = quien compró. Tiendas anteriores no mandan buyer*.
+    const buyerName = optionalString(body.buyerName);
+    const buyerPhone = optionalString(body.buyerPhone);
+    const recipientName = String(body.customerName).trim();
+    const recipientPhone = String(body.customerPhone).trim();
+    const contactLine = buyerName || buyerPhone
+      ? `Compra: ${[buyerName, buyerPhone].filter(Boolean).join(" · ")} · ${isDelivery ? "Recibe" : "Retira"}: ${recipientName} · ${recipientPhone}`
+      : null;
+
     const commentLines = [
       `Pedido web ${code}`,
+      contactLine,
       `Email: ${customerEmail}`,
       customerIdNumber ? `Cédula/RUC: ${customerIdNumber}` : null,
       `Pago: ${paymentMethod}${paymentReference ? ` · Ref. ${paymentReference}` : ""}`,
@@ -334,8 +346,8 @@ export async function createWebOrder(req: Request, res: Response, next: NextFunc
       orderDate: now,
       deliveryDate,
       deliveryTime: body.deliveryTime,
-      customerName: String(body.customerName).trim(),
-      customerPhone: String(body.customerPhone).trim(),
+      customerName: recipientName,
+      customerPhone: recipientPhone,
       salesChannel: WEB_ORDER_CHANNEL,
       products,
       deliveryType: body.deliveryType,
@@ -365,6 +377,9 @@ export async function createWebOrder(req: Request, res: Response, next: NextFunc
         code,
         customerEmail,
         customerIdNumber,
+        ...(buyerName || buyerPhone
+          ? { buyer: { ...(buyerName ? { name: buyerName } : {}), ...(buyerPhone ? { phone: buyerPhone } : {}) } }
+          : {}),
         paymentMethod: body.paymentMethod,
         paymentStatus,
         paymentReference,
@@ -398,6 +413,8 @@ export async function createWebOrder(req: Request, res: Response, next: NextFunc
         email: String(inv.email ?? "").trim() || customerEmail,
         address: String(inv.address ?? "").trim() || fallbackAddress || "Guayaquil",
         ...(inv.personType ? { personType: inv.personType } : {}),
+        // Teléfono de la factura (v7); sin él Contífico usa customerPhone como siempre.
+        ...(optionalString(inv.phone) ? { phone: optionalString(inv.phone) } : {}),
       };
     }
 
@@ -405,7 +422,7 @@ export async function createWebOrder(req: Request, res: Response, next: NextFunc
     if (!orderData.invoiceNeeded) {
       const fallbackAddress = isDelivery ? String(orderData.deliveryAddress || "").trim() : "";
       orderData.invoiceNeeded = true;
-      orderData.invoiceData = consumidorFinalInvoiceData(customerEmail, fallbackAddress);
+      orderData.invoiceData = consumidorFinalInvoiceData(customerEmail, fallbackAddress, buyerPhone);
     }
 
     if (paymentStatus === "PAID") {
