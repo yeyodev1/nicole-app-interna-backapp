@@ -487,7 +487,9 @@ export async function processPendingInvoices(req: AuthRequest, res: Response, ne
     // Count actionable orders: PENDING + ERROR
     const totalPending = await models.orders.countDocuments({
       invoiceNeeded: true,
-      invoiceStatus: { $in: ["PENDING", "ERROR"] }
+      invoiceStatus: { $in: ["PENDING", "ERROR"] },
+      // Pedidos web anulados no se facturan (los manuales siguen igual).
+      $nor: [{ "webOrder.externalId": { $exists: true, $ne: null }, $or: [{ productionStage: "VOID" }, { voidedAt: { $ne: null } }] }]
     });
 
     if (totalPending === 0) {
@@ -498,7 +500,9 @@ export async function processPendingInvoices(req: AuthRequest, res: Response, ne
     // PENDING orders take priority over ERROR retries
     const pendingOrders = await models.orders.find({
       invoiceNeeded: true,
-      invoiceStatus: { $in: ["PENDING", "ERROR"] }
+      invoiceStatus: { $in: ["PENDING", "ERROR"] },
+      // Pedidos web anulados no se facturan (los manuales siguen igual).
+      $nor: [{ "webOrder.externalId": { $exists: true, $ne: null }, $or: [{ productionStage: "VOID" }, { voidedAt: { $ne: null } }] }]
     })
       .sort({ invoiceStatus: -1 }) // "PENDING" > "ERROR" alphabetically → PENDING first
       .limit(BATCH_SIZE);
@@ -579,7 +583,9 @@ export async function processPendingInvoices(req: AuthRequest, res: Response, ne
     // Re-count remaining after processing (accurate for loop control)
     const remaining = await models.orders.countDocuments({
       invoiceNeeded: true,
-      invoiceStatus: { $in: ["PENDING", "ERROR"] }
+      invoiceStatus: { $in: ["PENDING", "ERROR"] },
+      // Pedidos web anulados no se facturan (los manuales siguen igual).
+      $nor: [{ "webOrder.externalId": { $exists: true, $ne: null }, $or: [{ productionStage: "VOID" }, { voidedAt: { $ne: null } }] }]
     });
 
     console.log(`[batch-invoice] Batch done. Processed: ${results.processed}, Failed: ${results.failed}, Remaining: ${remaining}`);
