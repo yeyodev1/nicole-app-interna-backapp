@@ -67,6 +67,12 @@ router.post("/:id/settle-island", OrderController.settleOrderInIsland);
 // PATCH /api/orders/:id/web-managed — pedido de la tienda online marcado como gestionado
 router.patch("/:id/web-managed", authMiddleware as any, OrderController.markWebOrderManaged);
 
+// POST /api/orders/:id/web-transfer/confirm — confirma la transferencia de un pedido web (y factura si invoiceNow)
+router.post("/:id/web-transfer/confirm", authMiddleware as any, OrderController.confirmWebTransfer);
+
+// POST /api/orders/:id/web-transfer/reject-proof — rechaza el comprobante; la tienda le pide otro al cliente
+router.post("/:id/web-transfer/reject-proof", authMiddleware as any, OrderController.rejectWebTransferProof);
+
 // PUT /api/orders/:id/return
 router.put("/:id/return", authMiddleware as any, OrderController.returnOrder);
 
