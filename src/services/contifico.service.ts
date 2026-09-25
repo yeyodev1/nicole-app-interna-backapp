@@ -12,6 +12,25 @@ import {
 } from "../config/contifico-emision.config";
 import { CONTIFICO_CUENTA_BANCARIA_TRA } from "../config/contifico-cobro.config";
 import { isPrecioIvaIncluido } from "../config/precio-final.config";
+import CustomError from "../errors/customError.error";
+
+/**
+ * Pedidos de la tienda online: ningún ítem puede facturarse con el producto de
+ * prueba de respaldo. Si alguno no tiene `contifico_id`, se corta antes de llamar
+ * a Contífico. Los pedidos manuales conservan el comportamiento de siempre.
+ */
+export function assertWebOrderProductsLinked(orderData: any): void {
+  // `webOrder` es un path anidado: en un documento hidratado existe (vacío) aunque el
+  // pedido sea manual, por eso se mira externalId.
+  if (!orderData?.webOrder?.externalId) return;
+  const missing = (orderData.products || []).find((p: any) => !String(p?.contifico_id ?? "").trim());
+  if (missing) {
+    throw new CustomError(
+      `El producto «${missing.name || "sin nombre"}» no está vinculado a Contífico. Edita el pedido y elígelo del catálogo antes de facturar.`,
+      400
+    );
+  }
+}
 
 export class ContificoService {
   private apiKey: string;
@@ -158,6 +177,8 @@ export class ContificoService {
    * Create an invoice in Contífico
    */
   async createInvoice(orderData: any) {
+    // Fuera del try: el catch de abajo convierte todo en { error } y esto debe llegar como 400.
+    assertWebOrderProductsLinked(orderData);
     try {
       // 1. Calculate Per-Item Values and Totals
       let subtotal_0 = 0;
@@ -273,7 +294,10 @@ export class ContificoService {
       // BLINDAJE SRI: si la persona ya existe en Contifico con tipo "C",
       // intentar corregirla antes de crear la factura.
       // Si no se puede corregir, usar datos de Consumidor Final como fallback.
-      const personaOk = await this.ensurePersonaTipo(rawId, computedTipo);
+      // Consumidor Final (9999999999 / 9999999999999): no es una persona real, se
+      // emite con los datos oficiales del SRI (mismo bloque que el fallback de abajo).
+      const isConsumidorFinal = /^9{10}(9{3})?$/.test(rawId);
+      const personaOk = isConsumidorFinal ? false : await this.ensurePersonaTipo(rawId, computedTipo);
       let invoiceRuc = computedRuc;
       let invoiceCedula = computedCedula;
       let invoiceTipo = computedTipo;
@@ -283,13 +307,14 @@ export class ContificoService {
 
       if (!personaOk) {
         // Fallback: Consumidor Final (persona_id: NO8bYRVq3HX9xd7j, tipo N, siempre autoriza)
-        console.warn(`⚠️ [${this.source}] Usando Consumidor Final como fallback para ${rawId}`);
+        if (!isConsumidorFinal) console.warn(`⚠️ [${this.source}] Usando Consumidor Final como fallback para ${rawId}`);
         invoiceRuc = "9999999999999";
         invoiceCedula = "9999999999";
         invoiceTipo = "N";
         invoiceRazonSocial = "consumidor final";
-        invoiceEmail = "noname@noname.com";
-        invoiceDireccion = "sin dirección";
+        // Al Consumidor Final elegido a propósito (pedidos web) le llega su comprobante.
+        invoiceEmail = (isConsumidorFinal && orderData.invoiceData?.email) || "noname@noname.com";
+        invoiceDireccion = (isConsumidorFinal && orderData.invoiceData?.address) || "sin dirección";
       }
 
       const clientePayload = {
@@ -931,6 +956,7 @@ export class ContificoService {
    * @param orderData Datos del pedido (mismos que se usan en createInvoice)
    */
   async repairDocument(documentId: string, orderData: any) {
+    assertWebOrderProductsLinked(orderData);
     try {
       // Recalcular totales correctos (igual que createInvoice)
       let subtotal_0 = 0;
