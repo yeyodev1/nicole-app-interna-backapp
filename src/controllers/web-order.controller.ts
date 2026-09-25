@@ -2,7 +2,8 @@ import { Request, Response, NextFunction } from "express";
 import { HttpStatusCode } from "axios";
 import { models } from "../models";
 import { ContificoService } from "../services/contifico.service";
-import { isPrecioIvaIncluido } from "../config/precio-final.config";
+import { isPrecioIvaIncluido, CONTIFICO_DELIVERY_ID } from "../config/precio-final.config";
+import { CONTIFICO_CUENTA_BANCARIA_TRA } from "../config/contifico-cobro.config";
 import { normalizeString } from "../utils/string.utils";
 
 /**
@@ -37,6 +38,51 @@ const optionalString = (v: unknown): string | undefined => (isNonEmptyString(v) 
 function paymentMethodLabel(method: string, status: WebPaymentStatus): string {
   if (method === "Payphone") return "Payphone (pagado)";
   return status === "PAID" ? "Transferencia (verificada)" : "Transferencia (por verificar)";
+}
+
+/** Hoy en Guayaquil como "YYYY-MM-DD" (mismo formato que manda el front en paymentDetails.fecha). */
+function todayInGuayaquil(): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "America/Guayaquil" });
+}
+
+/**
+ * Transferencia verificada en la tienda: se registra como cobro del pedido (igual que
+ * registerCollection) para que el saldo quede en 0 y la factura lo lleve a Contífico.
+ * Solo si todavía no hay cobros: nunca duplica uno registrado a mano.
+ */
+function applyWebTransferPayment(order: any, reference: string): boolean {
+  if ((order.payments || []).length > 0) return false;
+  const monto = Number(order.totalValue) || 0;
+  if (monto <= 0) return false;
+  const numero_comprobante = reference;
+  order.paymentDetails = {
+    forma_cobro: "TRA",
+    monto,
+    fecha: todayInGuayaquil(),
+    numero_comprobante,
+    cuenta_bancaria_id: CONTIFICO_CUENTA_BANCARIA_TRA,
+  };
+  order.payments = [
+    {
+      forma_cobro: "TRA",
+      monto,
+      fecha: new Date(),
+      numero_comprobante,
+      cuenta_bancaria_id: CONTIFICO_CUENTA_BANCARIA_TRA,
+      status: "PAID",
+    },
+  ];
+  return true;
+}
+
+/** Payphone: el cobro aún no se registra solo (pendiente con contabilidad); queda el recordatorio. */
+function payphoneAuditEntry(reference: string | undefined, at: Date) {
+  return {
+    user: WEB_ORDER_CHANNEL,
+    action: "Pago con Payphone",
+    at,
+    details: `Pagado con Payphone (ref ${reference || "—"}): registrar el cobro al facturar`,
+  };
 }
 
 /** "YYYY-MM-DD" que corresponde a una fecha real del calendario. */
@@ -197,7 +243,13 @@ export async function createWebOrder(req: Request, res: Response, next: NextFunc
       });
 
     if (deliveryValue > 0) {
-      products.push({ name: "Delivery", quantity: 1, price: deliveryValue });
+      // Producto real de Contífico: sin él la factura saldría con el producto de prueba.
+      products.push({
+        name: "Delivery",
+        quantity: 1,
+        price: deliveryValue,
+        ...(CONTIFICO_DELIVERY_ID ? { contifico_id: CONTIFICO_DELIVERY_ID } : {}),
+      });
     }
 
     // 2. Emparejar con Contífico por nombre los que llegan sin contifico_id.
@@ -303,13 +355,24 @@ export async function createWebOrder(req: Request, res: Response, next: NextFunc
 
     if (orderData.invoiceNeeded && body.invoiceData) {
       const inv = body.invoiceData;
+      // Contífico necesita correo y dirección del comprador: si la tienda no los manda,
+      // se usan los del pedido (en retiro no hay dirección de entrega: "Guayaquil").
+      const fallbackAddress = isDelivery ? String(orderData.deliveryAddress || "").trim() : "";
       orderData.invoiceData = {
         ruc: String(inv.ruc ?? "").trim(),
         businessName: String(inv.businessName ?? "").trim(),
-        email: String(inv.email ?? "").trim(),
-        address: String(inv.address ?? "").trim(),
+        email: String(inv.email ?? "").trim() || customerEmail,
+        address: String(inv.address ?? "").trim() || fallbackAddress || "Guayaquil",
         ...(inv.personType ? { personType: inv.personType } : {}),
       };
+    }
+
+    if (paymentStatus === "PAID") {
+      if (body.paymentMethod === "Transferencia") {
+        applyWebTransferPayment(orderData, paymentReference || code);
+      } else if (body.paymentMethod === "Payphone") {
+        orderData.auditLog.push(payphoneAuditEntry(paymentReference, now));
+      }
     }
 
     try {
@@ -366,14 +429,29 @@ export async function updateWebOrderPayment(req: Request, res: Response, next: N
     order.webOrder.paymentStatus = paymentStatus;
     const reference = optionalString(paymentReference);
     if (reference) order.webOrder.paymentReference = reference;
-    order.paymentMethod = paymentMethodLabel(order.webOrder.paymentMethod || "Transferencia", paymentStatus);
+    const webMethod = order.webOrder.paymentMethod || "Transferencia";
+    // Con cobros ya registrados en la app, paymentMethod refleja esos cobros: no se pisa.
+    const hadPayments = (order.payments || []).length > 0;
+    if (!hadPayments) order.paymentMethod = paymentMethodLabel(webMethod, paymentStatus);
+    const now = new Date();
     order.updatedBy = WEB_ORDER_CHANNEL;
     order.auditLog.push({
       user: WEB_ORDER_CHANNEL,
       action: paymentStatus === "PAID" ? "Pago verificado desde la tienda online" : "Pago marcado por verificar desde la tienda online",
-      at: new Date(),
+      at: now,
       details: `Estado de pago: ${previousStatus || "—"} → ${paymentStatus}${reference ? ` · Ref. ${reference}` : ""}`,
     });
+    if (paymentStatus === "PAID" && previousStatus !== "PAID") {
+      if (webMethod === "Transferencia") {
+        const ref = order.webOrder.paymentReference || order.webOrder.code || externalId;
+        if (applyWebTransferPayment(order, ref)) {
+          order.markModified("paymentDetails");
+          order.markModified("payments");
+        }
+      } else if (webMethod === "Payphone") {
+        order.auditLog.push(payphoneAuditEntry(order.webOrder.paymentReference, now));
+      }
+    }
     order.markModified("webOrder");
     await order.save();
 
@@ -436,7 +514,8 @@ function toIsoOrUndefined(value: unknown): string | undefined {
 /**
  * GET /api/web-orders/status?externalIds=a,b,c
  * Solo lectura: la tienda consulta en qué va cada pedido para avisarle al cliente.
- * Proyección mínima (nada de clientes, montos ni facturas). Los que no existen no vienen.
+ * Proyección mínima (nada de datos del cliente; solo total, lo cobrado y si ya se facturó).
+ * Los que no existen no vienen.
  */
 export async function getWebOrderStatuses(req: Request, res: Response, next: NextFunction) {
   try {
@@ -462,6 +541,11 @@ export async function getWebOrderStatuses(req: Request, res: Response, next: Nex
           "webOrder.externalId": 1,
           "webOrder.paymentStatus": 1,
           status: 1,
+          deliveryDate: 1,
+          deliveryTime: 1,
+          invoiceStatus: 1,
+          totalValue: 1,
+          payments: 1,
           productionStage: 1,
           dispatchStatus: 1,
           voidedAt: 1,
@@ -482,6 +566,16 @@ export async function getWebOrderStatuses(req: Request, res: Response, next: Nex
       ...(o.voidedAt ? { voidedAt: toIsoOrUndefined(o.voidedAt) ?? String(o.voidedAt) } : {}),
       deliveryType: o.deliveryType,
       ...(o.branch ? { branch: o.branch } : {}),
+      // deliveryDate se guarda a la medianoche UTC del día de entrega: la parte de fecha del ISO es el día.
+      ...(toIsoOrUndefined(o.deliveryDate) ? { deliveryDate: toIsoOrUndefined(o.deliveryDate)!.slice(0, 10) } : {}),
+      ...(o.deliveryTime ? { deliveryTime: o.deliveryTime } : {}),
+      invoiced: o.invoiceStatus === "PROCESSED",
+      totalValue: Number(o.totalValue) || 0,
+      paidAmount: Math.round(
+        (o.payments || [])
+          .filter((p: any) => (p?.status || "PAID") === "PAID")
+          .reduce((sum: number, p: any) => sum + (Number(p?.monto) || 0), 0) * 100,
+      ) / 100,
       updatedAt: toIsoOrUndefined(o.updatedAt),
     }));
 
