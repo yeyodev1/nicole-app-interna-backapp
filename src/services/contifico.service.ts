@@ -12,6 +12,25 @@ import {
 } from "../config/contifico-emision.config";
 import { CONTIFICO_CUENTA_BANCARIA_TRA } from "../config/contifico-cobro.config";
 import { isPrecioIvaIncluido } from "../config/precio-final.config";
+import CustomError from "../errors/customError.error";
+
+/**
+ * Pedidos de la tienda online: ningún ítem puede facturarse con el producto de
+ * prueba de respaldo. Si alguno no tiene `contifico_id`, se corta antes de llamar
+ * a Contífico. Los pedidos manuales conservan el comportamiento de siempre.
+ */
+export function assertWebOrderProductsLinked(orderData: any): void {
+  // `webOrder` es un path anidado: en un documento hidratado existe (vacío) aunque el
+  // pedido sea manual, por eso se mira externalId.
+  if (!orderData?.webOrder?.externalId) return;
+  const missing = (orderData.products || []).find((p: any) => !String(p?.contifico_id ?? "").trim());
+  if (missing) {
+    throw new CustomError(
+      `El producto «${missing.name || "sin nombre"}» no está vinculado a Contífico. Edita el pedido y elígelo del catálogo antes de facturar.`,
+      400
+    );
+  }
+}
 
 export class ContificoService {
   private apiKey: string;
@@ -158,6 +177,8 @@ export class ContificoService {
    * Create an invoice in Contífico
    */
   async createInvoice(orderData: any) {
+    // Fuera del try: el catch de abajo convierte todo en { error } y esto debe llegar como 400.
+    assertWebOrderProductsLinked(orderData);
     try {
       // 1. Calculate Per-Item Values and Totals
       let subtotal_0 = 0;
@@ -931,6 +952,7 @@ export class ContificoService {
    * @param orderData Datos del pedido (mismos que se usan en createInvoice)
    */
   async repairDocument(documentId: string, orderData: any) {
+    assertWebOrderProductsLinked(orderData);
     try {
       // Recalcular totales correctos (igual que createInvoice)
       let subtotal_0 = 0;
