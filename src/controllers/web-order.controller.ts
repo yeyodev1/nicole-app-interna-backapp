@@ -45,43 +45,66 @@ function todayInGuayaquil(): string {
   return new Date().toLocaleDateString("en-CA", { timeZone: "America/Guayaquil" });
 }
 
+/** Procesador con el que se registra en Contífico un cobro de Payphone (tarjeta). */
+const PAYPHONE_TIPO_PING = process.env.CONTIFICO_PAYPHONE_TIPO_PING || "D";
+
+/** Datos de la tarjeta que la tienda recibe de Payphone (sin datos sensibles). */
+interface WebCardInfo {
+  last4?: string;
+  authorizationCode?: string;
+}
+
 /**
- * Transferencia verificada en la tienda: se registra como cobro del pedido (igual que
- * registerCollection) para que el saldo quede en 0 y la factura lo lleve a Contífico.
+ * Pedido web pagado: se registra como cobro (igual que registerCollection) para que
+ * el saldo quede en 0 y, al facturar, el cobro llegue solo a Contífico.
+ *  - Transferencia → TRA a la cuenta de Banco Guayaquil.
+ *  - Payphone → Tarjeta (TC) con los últimos 4 dígitos y la autorización de Payphone.
  * Solo si todavía no hay cobros: nunca duplica uno registrado a mano.
  */
-function applyWebTransferPayment(order: any, reference: string): boolean {
+function applyWebPayment(order: any, method: string, reference: string, card: WebCardInfo = {}): boolean {
   if ((order.payments || []).length > 0) return false;
   const monto = Number(order.totalValue) || 0;
   if (monto <= 0) return false;
-  const numero_comprobante = reference;
-  order.paymentDetails = {
-    forma_cobro: "TRA",
-    monto,
-    fecha: todayInGuayaquil(),
-    numero_comprobante,
-    cuenta_bancaria_id: CONTIFICO_CUENTA_BANCARIA_TRA,
-  };
-  order.payments = [
-    {
-      forma_cobro: "TRA",
-      monto,
-      fecha: new Date(),
-      numero_comprobante,
-      cuenta_bancaria_id: CONTIFICO_CUENTA_BANCARIA_TRA,
-      status: "PAID",
-    },
-  ];
+
+  const base =
+    method === "Payphone"
+      ? {
+          forma_cobro: "TC",
+          monto,
+          numero_comprobante: card.authorizationCode || reference,
+          tipo_ping: PAYPHONE_TIPO_PING,
+          ...(card.last4 ? { numero_tarjeta: card.last4 } : {}),
+        }
+      : {
+          forma_cobro: "TRA",
+          monto,
+          numero_comprobante: reference,
+          cuenta_bancaria_id: CONTIFICO_CUENTA_BANCARIA_TRA,
+        };
+
+  order.paymentDetails = { ...base, fecha: todayInGuayaquil() };
+  order.payments = [{ ...base, fecha: new Date(), status: "PAID" }];
   return true;
 }
 
-/** Payphone: el cobro aún no se registra solo (pendiente con contabilidad); queda el recordatorio. */
-function payphoneAuditEntry(reference: string | undefined, at: Date) {
+/** Deja el pedido web pagado en cola para la facturación automática (cron nocturno). */
+function queueWebInvoice(order: any) {
+  if (order.invoiceNeeded && order.invoiceData?.ruc && order.invoiceStatus !== "PROCESSED") {
+    order.invoiceStatus = "PENDING";
+  }
+}
+
+/**
+ * Sin datos de factura, el pedido web se factura a Consumidor Final (SRI
+ * 9999999999999) con el correo del cliente, para que le llegue su comprobante.
+ */
+function consumidorFinalInvoiceData(email: string, address: string) {
   return {
-    user: WEB_ORDER_CHANNEL,
-    action: "Pago con Payphone",
-    at,
-    details: `Pagado con Payphone (ref ${reference || "—"}): registrar el cobro al facturar`,
+    ruc: "9999999999999",
+    businessName: "Consumidor Final",
+    email,
+    address: address || "Guayaquil",
+    personType: "natural",
   };
 }
 
@@ -367,12 +390,16 @@ export async function createWebOrder(req: Request, res: Response, next: NextFunc
       };
     }
 
+    // Sin factura con datos: se factura a Consumidor Final (decisión de Nicole).
+    if (!orderData.invoiceNeeded) {
+      const fallbackAddress = isDelivery ? String(orderData.deliveryAddress || "").trim() : "";
+      orderData.invoiceNeeded = true;
+      orderData.invoiceData = consumidorFinalInvoiceData(customerEmail, fallbackAddress);
+    }
+
     if (paymentStatus === "PAID") {
-      if (body.paymentMethod === "Transferencia") {
-        applyWebTransferPayment(orderData, paymentReference || code);
-      } else if (body.paymentMethod === "Payphone") {
-        orderData.auditLog.push(payphoneAuditEntry(paymentReference, now));
-      }
+      applyWebPayment(orderData, body.paymentMethod, paymentReference || code, body.paymentCard || {});
+      queueWebInvoice(orderData);
     }
 
     try {
@@ -442,15 +469,12 @@ export async function updateWebOrderPayment(req: Request, res: Response, next: N
       details: `Estado de pago: ${previousStatus || "—"} → ${paymentStatus}${reference ? ` · Ref. ${reference}` : ""}`,
     });
     if (paymentStatus === "PAID" && previousStatus !== "PAID") {
-      if (webMethod === "Transferencia") {
-        const ref = order.webOrder.paymentReference || order.webOrder.code || externalId;
-        if (applyWebTransferPayment(order, ref)) {
-          order.markModified("paymentDetails");
-          order.markModified("payments");
-        }
-      } else if (webMethod === "Payphone") {
-        order.auditLog.push(payphoneAuditEntry(order.webOrder.paymentReference, now));
+      const ref = order.webOrder.paymentReference || order.webOrder.code || externalId;
+      if (applyWebPayment(order, webMethod, ref, req.body?.paymentCard || {})) {
+        order.markModified("paymentDetails");
+        order.markModified("payments");
       }
+      queueWebInvoice(order);
     }
     order.markModified("webOrder");
     await order.save();
