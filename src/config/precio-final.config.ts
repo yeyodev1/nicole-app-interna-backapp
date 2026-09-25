@@ -30,3 +30,11 @@ export function isPrecioIvaIncluido(item: { contifico_id?: string; name?: string
   if (item.contifico_id && CONTIFICO_PRECIO_FINAL_IDS.has(item.contifico_id)) return true;
   return String(item.name ?? "").toLowerCase().includes("delivery");
 }
+
+/**
+ * Producto "Delivery" de la cuenta Nicole en Contífico (código 950, `pvp_manual`),
+ * consultado en /producto/ el 24/09/2026. Los pedidos de la tienda online lo usan
+ * para el ítem de envío: sin él la factura caía al producto de prueba.
+ * Env opcional: `CONTIFICO_DELIVERY_ID`.
+ */
+export const CONTIFICO_DELIVERY_ID = (process.env.CONTIFICO_DELIVERY_ID || "0pZeVwVRNf8ZAaGW").trim();
