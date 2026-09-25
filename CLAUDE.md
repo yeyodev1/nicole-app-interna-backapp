@@ -78,6 +78,7 @@ All routes are mounted under `/api` prefix. The flow is:
 Required: `DB_URI`, `JWT_SECRET`, `CONTIFICO_API_KEY`, `CONTIFICO_TOKEN`. Check `.env` for additional keys (Cloudinary, Resend, Google AI, OpenAI, Firebase).
 
 Optional, integración con la tienda online: `WEB_ORDERS_API_KEY=` (clave compartida para `/api/web-orders`; sin ella esas rutas responden 503), `CONTIFICO_DELIVERY_ID=` (producto de Contífico del ítem Delivery de los pedidos web; default `0pZeVwVRNf8ZAaGW`, "Delivery" código 950 de Nicole, en `precio-final.config.ts`).
+`CONTIFICO_PAYPHONE_TIPO_PING` (opcional, default `D`): procesador del cobro TC de pedidos web pagados con Payphone. Los pedidos web sin datos de factura se facturan a Consumidor Final (9999999999999) con el correo del cliente; al quedar pagados entran en cola (`invoiceStatus` PENDING) para el cron nocturno, que no factura pedidos web anulados.
 
 Optional, punto de emisión de facturas (`src/config/contifico-emision.config.ts`):
 `CONTIFICO_ESTABLECIMIENTO` (default `001`), `CONTIFICO_PUNTO_EMISION` (default `001` = Matriz / CDP),

@@ -89,6 +89,7 @@ Sólo si la cuenta nueva es **otra empresa** (otro RUC, otros bancos, otra caja)
 | `CONTIFICO_CUENTA_BANCARIA_TRA` | ID de la cuenta bancaria donde se registran las transferencias | Banco Guayaquil de Nicole |
 | `CONTIFICO_PRECIO_FINAL_IDS` | IDs de productos cuyo precio ya incluye IVA, separados por coma | Delivery |
 | `CONTIFICO_DELIVERY_ID` | Producto de Contífico que se asigna al ítem "Delivery" de los pedidos de la tienda online | `0pZeVwVRNf8ZAaGW` (Delivery, código 950, cuenta Nicole) |
+- `CONTIFICO_PAYPHONE_TIPO_PING` (opcional, default `D`): procesador con el que se registra en Contífico el cobro con tarjeta de los pedidos web pagados con Payphone.
 | `CONTIFICO_SECUENCIAL_MINIMO` | Piso del número de factura (el contador nunca baja de aquí) | `0` |
 | `CONTIFICO_SECUENCIALES_EXCLUIDOS` | Rango de números que se salta, ej. `1000001-1000010` | `1000001-1000010` |
 
