@@ -324,7 +324,8 @@ export class ContificoService {
         email: invoiceEmail,
         direccion: invoiceDireccion,
         tipo: invoiceTipo,
-        telefonos: orderData.customerPhone
+        // Pedidos web (v7): customerPhone es de quien recibe; la factura lleva su propio teléfono.
+        telefonos: orderData.invoiceData?.phone || orderData.customerPhone
       };
 
       const payload = {
@@ -1032,7 +1033,7 @@ export class ContificoService {
           email: orderData.invoiceData?.email,
           direccion: orderData.invoiceData?.address,
           tipo,
-          telefonos: orderData.customerPhone,
+          telefonos: orderData.invoiceData?.phone || orderData.customerPhone,
         },
         detalles,
         subtotal_0: Number(subtotal_0.toFixed(2)),
