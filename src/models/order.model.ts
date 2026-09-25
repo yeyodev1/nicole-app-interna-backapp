@@ -45,6 +45,8 @@ export interface IWebOrder {
   code?: string;
   customerEmail?: string;
   customerIdNumber?: string;
+  /** Quien compró (v7). customerName/customerPhone del pedido son de quien recibe/retira. */
+  buyer?: { name?: string; phone?: string };
   /** Método de pago tal cual lo manda la tienda: 'Payphone' | 'Transferencia'. */
   paymentMethod?: string;
   paymentStatus?: "PAID" | "PENDING_VERIFICATION";
@@ -105,6 +107,8 @@ export interface IOrder extends Document {
     email: string;
     address: string;
     personType?: 'natural' | 'juridica';
+    /** Teléfono para la factura (pedidos web v7). Si falta, Contífico recibe customerPhone. */
+    phone?: string;
   };
   invoiceStatus?: "PENDING" | "PROCESSED" | "ERROR";
   invoiceError?: string;
@@ -255,6 +259,7 @@ const OrderSchema = new Schema<IOrder>(
       email: { type: String },
       address: { type: String },
       personType: { type: String, enum: ['natural', 'juridica'] },
+      phone: { type: String },
     },
     invoiceInfo: { type: Schema.Types.Mixed },
     invoiceSentToSriAt: { type: Date, default: undefined },
@@ -291,6 +296,10 @@ const OrderSchema = new Schema<IOrder>(
       code: { type: String },
       customerEmail: { type: String },
       customerIdNumber: { type: String },
+      buyer: {
+        type: new Schema({ name: String, phone: String }, { _id: false }),
+        default: undefined,
+      },
       paymentMethod: { type: String },
       paymentStatus: { type: String, enum: ["PAID", "PENDING_VERIFICATION"] },
       paymentReference: { type: String },
