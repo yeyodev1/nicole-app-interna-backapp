@@ -57,6 +57,8 @@ export interface IWebOrder {
   /** Foto del comprobante de transferencia que subió el cliente en la tienda (Cloudinary). */
   paymentProofUrl?: string;
   paymentProofAt?: Date;
+  /** Último comprobante rechazado desde la app interna (la tienda lo aplica en su cron). Se limpia con uno nuevo. */
+  proofRejected?: { reason?: string; at: Date; by?: string };
   receivedAt?: Date;
   managedAt?: Date;
   managedBy?: string;
@@ -142,6 +144,8 @@ export interface IOrder extends Document {
     numero_tarjeta?: string;
     reference?: string;
     status?: string;
+    /** Pedidos web: foto del comprobante de transferencia con la que se confirmó el cobro. */
+    comprobanteUrl?: string;
   }>;
   status?: string; // Top level status (e.g. DELIVERED). Pedidos web: PENDIENTE_GESTION → GESTIONADO
   /** Sólo en pedidos que llegan de la tienda online (`/api/web-orders`). */
@@ -295,6 +299,10 @@ const OrderSchema = new Schema<IOrder>(
       originBranch: { type: String },
       paymentProofUrl: { type: String },
       paymentProofAt: { type: Date },
+      proofRejected: {
+        type: new Schema({ reason: String, at: Date, by: String }, { _id: false }),
+        default: undefined,
+      },
       receivedAt: { type: Date },
       managedAt: { type: Date },
       managedBy: { type: String },
@@ -319,6 +327,7 @@ const OrderSchema = new Schema<IOrder>(
         tipo_ping: String,
         numero_tarjeta: String,
         reference: String, // Contifico or external reference
+        comprobanteUrl: String, // Pedidos web: comprobante de la transferencia confirmada
         status: { type: String, enum: ['PENDING', 'PAID', 'ERROR'], default: 'PAID' }
       }
     ]

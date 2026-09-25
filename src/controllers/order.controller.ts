@@ -8,6 +8,7 @@ import CustomError from "../errors/customError.error";
 import { getECDateRange } from "../utils/date.utils";
 import { AuthRequest } from "../types/AuthRequest";
 import { Types } from "mongoose";
+import { applyWebPayment, queueWebInvoice } from "./web-order.controller";
 
 const nicoleContificoService = new ContificoService('nicole');
 const sucreeContificoService = new ContificoService('sucree');
@@ -829,6 +830,230 @@ export async function markWebOrderManaged(req: AuthRequest, res: Response, next:
     res.status(HttpStatusCode.InternalServerError).send({
       message: "Error interno al marcar el pedido como gestionado.",
       error: error instanceof Error ? error.message : String(error)
+    });
+    return;
+  }
+}
+
+/** Roles que pueden confirmar o rechazar la transferencia de un pedido web. */
+const WEB_TRANSFER_ROLES = ["admin", "superadmin", "SALES_MANAGER", "sales"];
+
+/**
+ * Carga un pedido web por transferencia que aún no está pagado. Si no aplica,
+ * responde el error y devuelve null.
+ */
+async function loadPendingWebTransfer(req: AuthRequest, res: Response) {
+  if (!WEB_TRANSFER_ROLES.includes(String(req.user?.role || ""))) {
+    res.status(HttpStatusCode.Forbidden).send({ message: "No tienes permiso para confirmar transferencias de la tienda online." });
+    return null;
+  }
+  const { id } = req.params;
+  if (!Types.ObjectId.isValid(String(id))) {
+    res.status(HttpStatusCode.NotFound).send({ message: "Pedido no encontrado." });
+    return null;
+  }
+  const order = await models.orders.findById(id);
+  if (!order) {
+    res.status(HttpStatusCode.NotFound).send({ message: "Pedido no encontrado." });
+    return null;
+  }
+  if (!order.webOrder?.externalId) {
+    res.status(HttpStatusCode.BadRequest).send({ message: "Este pedido no viene de la tienda online." });
+    return null;
+  }
+  if (order.webOrder.paymentMethod !== "Transferencia") {
+    res.status(HttpStatusCode.BadRequest).send({ message: "Este pedido web no se paga por transferencia." });
+    return null;
+  }
+  if (order.webOrder.paymentStatus === "PAID") {
+    res.status(HttpStatusCode.Conflict).send({ message: "La transferencia de este pedido ya está confirmada.", order });
+    return null;
+  }
+  if (order.voidedAt || order.productionStage === "VOID") {
+    res.status(HttpStatusCode.Conflict).send({ message: "El pedido está anulado." });
+    return null;
+  }
+  return order;
+}
+
+/**
+ * Confirma la transferencia de un pedido web con el comprobante que subió el cliente.
+ * Registra el cobro TRA (mismo cobro que applyWebPayment), deja la factura en cola y,
+ * con `invoiceNow`, la emite en el momento con el flujo de generateInvoice.
+ * POST /api/orders/:id/web-transfer/confirm  body { reference?, invoiceNow?, withoutProof? }
+ */
+export async function confirmWebTransfer(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    const order = await loadPendingWebTransfer(req, res);
+    if (!order) return;
+    const body = req.body || {};
+    const invoiceNow = body.invoiceNow === true;
+    const proofUrl = order.webOrder!.paymentProofUrl || "";
+
+    if (!proofUrl && body.withoutProof !== true) {
+      res.status(HttpStatusCode.BadRequest).send({
+        message: "El cliente aún no sube el comprobante. Para confirmar sin comprobante envía withoutProof: true.",
+      });
+      return;
+    }
+    if (body.reference !== undefined && body.reference !== null && typeof body.reference !== "string") {
+      res.status(HttpStatusCode.BadRequest).send({ message: "reference debe ser texto." });
+      return;
+    }
+    if ((order.payments || []).length > 0) {
+      res.status(HttpStatusCode.Conflict).send({
+        message: "El pedido ya tiene cobros registrados. Complétalo con «Registrar cobro».",
+      });
+      return;
+    }
+    // Antes de tocar nada: si la factura no se puede emitir, no se confirma a medias.
+    if (invoiceNow && order.invoiceStatus !== "PROCESSED") {
+      assertWebOrderProductsLinked(order);
+    }
+
+    const reference = String(body.reference ?? "").trim().slice(0, 100) || order.webOrder!.code || order.webOrder!.externalId;
+    const userName = req.user?.name || req.user?.email || "Usuario";
+    const now = new Date();
+
+    // Reclamo atómico: dos clics (o dos personas) no registran dos cobros.
+    const claim = await models.orders.updateOne(
+      { _id: order._id, "webOrder.paymentStatus": { $ne: "PAID" }, "payments.0": { $exists: false } },
+      { $set: { "webOrder.paymentStatus": "PAID" } },
+    );
+    if (claim.modifiedCount !== 1) {
+      res.status(HttpStatusCode.Conflict).send({ message: "Otra persona acaba de confirmar este pago. Recarga el pedido." });
+      return;
+    }
+
+    try {
+      if (!applyWebPayment(order, "Transferencia", reference)) {
+        throw new CustomError("El pedido no tiene un total válido para registrar el cobro.", 400);
+      }
+      if (proofUrl) (order.payments[0] as any).comprobanteUrl = proofUrl;
+      order.markModified("paymentDetails");
+      order.markModified("payments");
+      order.webOrder!.paymentStatus = "PAID";
+      if (body.reference) order.webOrder!.paymentReference = reference;
+      order.webOrder!.proofRejected = undefined;
+      order.markModified("webOrder");
+      order.paymentMethod = "Transferencia (verificada)";
+      queueWebInvoice(order);
+      order.updatedBy = userName;
+      order.auditLog.push({
+        user: userName,
+        action: `Transferencia confirmada por ${userName} (${proofUrl ? "con comprobante" : "sin comprobante"})`,
+        at: now,
+        details: [
+          `Cobro TRA $${Number(order.totalValue).toFixed(2)} · Ref. ${reference}`,
+          proofUrl ? `Comprobante: ${proofUrl}` : "Sin comprobante del cliente",
+          invoiceNow ? "Factura: emitir ahora" : "Factura en cola (cron nocturno)",
+        ].join(" · "),
+      });
+      await order.save();
+    } catch (error) {
+      // No se guardó el cobro: se suelta el reclamo para que se pueda reintentar.
+      await models.orders
+        .updateOne({ _id: order._id, "payments.0": { $exists: false } }, { $set: { "webOrder.paymentStatus": "PENDING_VERIFICATION" } })
+        .catch(() => undefined);
+      throw error;
+    }
+
+    // Factura ya emitida antes del pago: el cobro va directo a Contífico, como en registerCollection.
+    const documentId = order.invoiceInfo?.id;
+    if (documentId) {
+      try {
+        await withCorrectService(String(order._id), (order as any).contificoSource, (svc) =>
+          svc.registerCollection(documentId, { ...order.paymentDetails, monto: order.totalValue }),
+        );
+      } catch (error: any) {
+        console.error(`❌ [web-transfer] Cobro de ${order.webOrder?.code} no llegó a Contífico:`, error?.message || error);
+      }
+    }
+
+    if (!invoiceNow || order.invoiceStatus === "PROCESSED") {
+      res.status(HttpStatusCode.Ok).send({ message: "Pago confirmado. La factura queda en cola para esta noche.", invoiced: order.invoiceStatus === "PROCESSED", order });
+      return;
+    }
+
+    // Mismo flujo que el botón "Generar factura": se captura su respuesta para decir qué pasó con el pago.
+    const captured: { status: number; body: any } = { status: HttpStatusCode.Ok, body: null };
+    const captureRes: any = {
+      status(code: number) { captured.status = code; return captureRes; },
+      send(payload: any) { captured.body = payload; return captureRes; },
+      json(payload: any) { captured.body = payload; return captureRes; },
+    };
+    await generateInvoice(req, captureRes as Response, next);
+
+    if (captured.status < 300) {
+      res.status(HttpStatusCode.Ok).send({ message: "Pago confirmado y factura emitida.", invoiced: true, order: captured.body?.order });
+      return;
+    }
+    const fresh = await models.orders.findById(order._id);
+    res.status(captured.status).send({
+      message: `Pago confirmado, pero no se pudo emitir la factura: ${captured.body?.message || "error desconocido"}`,
+      paymentConfirmed: true,
+      invoiced: false,
+      contificoMessage: captured.body?.contificoMessage || null,
+      order: fresh,
+    });
+    return;
+  } catch (error: any) {
+    if (error instanceof CustomError) {
+      res.status(error.status).send({ message: error.message });
+      return;
+    }
+    console.error("❌ Error in confirmWebTransfer:", error);
+    res.status(HttpStatusCode.InternalServerError).send({
+      message: "Error interno al confirmar la transferencia.",
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return;
+  }
+}
+
+/**
+ * Rechaza el comprobante de un pedido web. La tienda lo lee en su cron
+ * (GET /web-orders/status → proofRejected), borra su copia y le pide otro al cliente.
+ * POST /api/orders/:id/web-transfer/reject-proof  body { reason? }
+ */
+export async function rejectWebTransferProof(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    const order = await loadPendingWebTransfer(req, res);
+    if (!order) return;
+    const proofUrl = order.webOrder!.paymentProofUrl;
+    if (!proofUrl) {
+      res.status(HttpStatusCode.BadRequest).send({ message: "El pedido no tiene un comprobante para rechazar." });
+      return;
+    }
+    const rawReason = req.body?.reason;
+    if (rawReason !== undefined && rawReason !== null && typeof rawReason !== "string") {
+      res.status(HttpStatusCode.BadRequest).send({ message: "reason debe ser texto." });
+      return;
+    }
+    const reason = String(rawReason ?? "").trim().slice(0, 300);
+    const userName = req.user?.name || req.user?.email || "Usuario";
+    const now = new Date();
+
+    order.webOrder!.proofRejected = { ...(reason ? { reason } : {}), at: now, by: userName };
+    order.webOrder!.paymentProofUrl = undefined;
+    order.webOrder!.paymentProofAt = undefined;
+    order.markModified("webOrder");
+    order.updatedBy = userName;
+    order.auditLog.push({
+      user: userName,
+      action: `Comprobante de transferencia rechazado por ${userName}`,
+      at: now,
+      details: `${reason ? `Motivo: ${reason} · ` : ""}La tienda le pedirá uno nuevo al cliente · ${proofUrl}`,
+    });
+    await order.save();
+
+    res.status(HttpStatusCode.Ok).send({ message: "Comprobante rechazado. La tienda le pedirá uno nuevo al cliente.", order });
+    return;
+  } catch (error) {
+    console.error("❌ Error in rejectWebTransferProof:", error);
+    res.status(HttpStatusCode.InternalServerError).send({
+      message: "Error interno al rechazar el comprobante.",
+      error: error instanceof Error ? error.message : String(error),
     });
     return;
   }
