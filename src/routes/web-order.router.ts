@@ -16,6 +16,9 @@ router.get("/contifico-products", WebOrderController.searchContificoProducts);
 // GET /api/web-orders/status?externalIds=a,b,c (solo lectura, máx. 100)
 router.get("/status", WebOrderController.getWebOrderStatuses);
 
+// GET /api/web-orders/notify-recipients (correos de administradores de ventas para los avisos)
+router.get("/notify-recipients", WebOrderController.getNotifyRecipients);
+
 // POST /api/web-orders
 router.post("/", WebOrderController.createWebOrder);
 
