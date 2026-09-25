@@ -294,7 +294,10 @@ export class ContificoService {
       // BLINDAJE SRI: si la persona ya existe en Contifico con tipo "C",
       // intentar corregirla antes de crear la factura.
       // Si no se puede corregir, usar datos de Consumidor Final como fallback.
-      const personaOk = await this.ensurePersonaTipo(rawId, computedTipo);
+      // Consumidor Final (9999999999 / 9999999999999): no es una persona real, se
+      // emite con los datos oficiales del SRI (mismo bloque que el fallback de abajo).
+      const isConsumidorFinal = /^9{10}(9{3})?$/.test(rawId);
+      const personaOk = isConsumidorFinal ? false : await this.ensurePersonaTipo(rawId, computedTipo);
       let invoiceRuc = computedRuc;
       let invoiceCedula = computedCedula;
       let invoiceTipo = computedTipo;
@@ -304,13 +307,14 @@ export class ContificoService {
 
       if (!personaOk) {
         // Fallback: Consumidor Final (persona_id: NO8bYRVq3HX9xd7j, tipo N, siempre autoriza)
-        console.warn(`⚠️ [${this.source}] Usando Consumidor Final como fallback para ${rawId}`);
+        if (!isConsumidorFinal) console.warn(`⚠️ [${this.source}] Usando Consumidor Final como fallback para ${rawId}`);
         invoiceRuc = "9999999999999";
         invoiceCedula = "9999999999";
         invoiceTipo = "N";
         invoiceRazonSocial = "consumidor final";
-        invoiceEmail = "noname@noname.com";
-        invoiceDireccion = "sin dirección";
+        // Al Consumidor Final elegido a propósito (pedidos web) le llega su comprobante.
+        invoiceEmail = (isConsumidorFinal && orderData.invoiceData?.email) || "noname@noname.com";
+        invoiceDireccion = (isConsumidorFinal && orderData.invoiceData?.address) || "sin dirección";
       }
 
       const clientePayload = {
