@@ -64,7 +64,7 @@ interface WebCardInfo {
  *  - Payphone → Tarjeta (TC) con los últimos 4 dígitos y la autorización de Payphone.
  * Solo si todavía no hay cobros: nunca duplica uno registrado a mano.
  */
-function applyWebPayment(order: any, method: string, reference: string, card: WebCardInfo = {}): boolean {
+export function applyWebPayment(order: any, method: string, reference: string, card: WebCardInfo = {}): boolean {
   if ((order.payments || []).length > 0) return false;
   const monto = Number(order.totalValue) || 0;
   if (monto <= 0) return false;
@@ -91,7 +91,7 @@ function applyWebPayment(order: any, method: string, reference: string, card: We
 }
 
 /** Deja el pedido web pagado en cola para la facturación automática (cron nocturno). */
-function queueWebInvoice(order: any) {
+export function queueWebInvoice(order: any) {
   if (order.invoiceNeeded && order.invoiceData?.ruc && order.invoiceStatus !== "PROCESSED") {
     order.invoiceStatus = "PENDING";
   }
@@ -482,6 +482,8 @@ export async function updateWebOrderPayment(req: Request, res: Response, next: N
       if (url && url !== order.webOrder.paymentProofUrl) {
         order.webOrder.paymentProofUrl = url;
         order.webOrder.paymentProofAt = now;
+        // Comprobante nuevo tras un rechazo desde la app interna: la ronda anterior queda cerrada.
+        order.webOrder.proofRejected = undefined;
         order.auditLog.push({ user: WEB_ORDER_CHANNEL, action: PROOF_RECEIVED, at: now, details: `Por verificar · ${url}` });
       } else if (!url && order.webOrder.paymentProofUrl) {
         order.webOrder.paymentProofUrl = undefined;
@@ -607,6 +609,8 @@ export async function getWebOrderStatuses(req: Request, res: Response, next: Nex
           _id: 0,
           "webOrder.externalId": 1,
           "webOrder.paymentStatus": 1,
+          "webOrder.paymentProofUrl": 1,
+          "webOrder.proofRejected": 1,
           status: 1,
           deliveryDate: 1,
           deliveryTime: 1,
@@ -644,6 +648,16 @@ export async function getWebOrderStatuses(req: Request, res: Response, next: Nex
           .reduce((sum: number, p: any) => sum + (Number(p?.monto) || 0), 0) * 100,
       ) / 100,
       updatedAt: toIsoOrUndefined(o.updatedAt),
+      ...(o.webOrder?.paymentProofUrl ? { paymentProofUrl: o.webOrder.paymentProofUrl } : {}),
+      // Comprobante rechazado en la app interna: la tienda borra el suyo y le pide otro al cliente.
+      ...(o.webOrder?.proofRejected?.at
+        ? {
+            proofRejected: {
+              ...(o.webOrder.proofRejected.reason ? { reason: o.webOrder.proofRejected.reason } : {}),
+              at: toIsoOrUndefined(o.webOrder.proofRejected.at),
+            },
+          }
+        : {}),
     }));
 
     res.status(HttpStatusCode.Ok).send(results);
@@ -651,6 +665,53 @@ export async function getWebOrderStatuses(req: Request, res: Response, next: Nex
   } catch (error) {
     console.error("❌ [web-orders] Error leyendo estados:", error);
     res.status(HttpStatusCode.InternalServerError).send({ message: "Error interno al leer los estados de pedidos web." });
+    return;
+  }
+}
+
+/** Usuarios que reciben los avisos de la tienda: administradores de ventas de Nicole y superadmin. */
+const NOTIFY_ROLES_BY_SOURCE = ["SALES_MANAGER"];
+const NOTIFY_ROLES_ANY_SOURCE = ["superadmin"];
+
+/**
+ * GET /api/web-orders/notify-recipients
+ * Correos a los que la tienda manda "pedido nuevo" y "comprobante recibido".
+ * SALES_MANAGER de Nicole (contificoSource nicole/both o sin definir) y superadmin.
+ * El modelo de usuario no tiene estado activo/inactivo: todo usuario existente cuenta.
+ */
+export async function getNotifyRecipients(req: Request, res: Response, next: NextFunction) {
+  try {
+    const users: any[] = await models.users
+      .find(
+        {
+          $or: [
+            {
+              role: { $in: NOTIFY_ROLES_BY_SOURCE },
+              $or: [
+                { contificoSource: { $in: ["nicole", "both", null, ""] } },
+                { contificoSource: { $exists: false } },
+              ],
+            },
+            { role: { $in: NOTIFY_ROLES_ANY_SOURCE } },
+          ],
+        },
+        { email: 1 },
+      )
+      .lean();
+
+    const emails = [
+      ...new Set(
+        users
+          .map((u) => String(u?.email ?? "").trim().toLowerCase())
+          .filter((e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)),
+      ),
+    ].sort();
+
+    res.status(HttpStatusCode.Ok).send({ emails });
+    return;
+  } catch (error) {
+    console.error("❌ [web-orders] Error leyendo destinatarios de avisos:", error);
+    res.status(HttpStatusCode.InternalServerError).send({ message: "Error interno al leer los destinatarios de avisos." });
     return;
   }
 }
