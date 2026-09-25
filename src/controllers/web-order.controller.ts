@@ -34,6 +34,9 @@ type WebPaymentStatus = "PAID" | "PENDING_VERIFICATION";
 const isNonEmptyString = (v: unknown): v is string => typeof v === "string" && v.trim().length > 0;
 const isFiniteNumber = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const optionalString = (v: unknown): string | undefined => (isNonEmptyString(v) ? v.trim() : undefined);
+/** URL del comprobante de transferencia (Cloudinary de la tienda): solo https. */
+const isProofUrl = (v: unknown): v is string => isNonEmptyString(v) && /^https:\/\/\S+$/.test(v.trim()) && v.length <= 1000;
+const PROOF_RECEIVED = "Comprobante de transferencia recibido";
 
 function paymentMethodLabel(method: string, status: WebPaymentStatus): string {
   if (method === "Payphone") return "Payphone (pagado)";
@@ -181,6 +184,9 @@ function validateWebOrderBody(body: any): string[] {
     errors.push("paymentStatus debe ser 'PAID' o 'PENDING_VERIFICATION'.");
   }
 
+  if (body.paymentProofUrl !== undefined && body.paymentProofUrl !== null && body.paymentProofUrl !== "" && !isProofUrl(body.paymentProofUrl)) {
+    errors.push("paymentProofUrl debe ser una URL https.");
+  }
   if (body.invoiceNeeded !== undefined && typeof body.invoiceNeeded !== "boolean") {
     errors.push("invoiceNeeded debe ser true o false.");
   }
@@ -322,6 +328,7 @@ export async function createWebOrder(req: Request, res: Response, next: NextFunc
     //    Los filtros por día (getECDateRange) y la vista (parseECTDate) asumen ese formato;
     //    la hora de entrega en hora de Guayaquil vive en `deliveryTime`.
     const deliveryDate = new Date(`${body.deliveryDate}T00:00:00.000Z`);
+    const paymentProofUrl = isProofUrl(body.paymentProofUrl) ? body.paymentProofUrl.trim() : undefined;
 
     const orderData: any = {
       orderDate: now,
@@ -349,6 +356,9 @@ export async function createWebOrder(req: Request, res: Response, next: NextFunc
           at: now,
           details: auditDetails,
         },
+        ...(paymentProofUrl
+          ? [{ user: WEB_ORDER_CHANNEL, action: PROOF_RECEIVED, at: now, details: `Por verificar · ${paymentProofUrl}` }]
+          : []),
       ],
       webOrder: {
         externalId,
@@ -361,6 +371,7 @@ export async function createWebOrder(req: Request, res: Response, next: NextFunc
         deliveryReference,
         ...(deliveryKm !== undefined ? { deliveryKm } : {}),
         ...(originBranch ? { originBranch } : {}),
+        ...(paymentProofUrl ? { paymentProofUrl, paymentProofAt: now } : {}),
         receivedAt: now,
       },
     };
@@ -435,10 +446,21 @@ export async function createWebOrder(req: Request, res: Response, next: NextFunc
 export async function updateWebOrderPayment(req: Request, res: Response, next: NextFunction) {
   try {
     const externalId = String(req.params.externalId || "").trim();
-    const { paymentStatus, paymentReference } = req.body || {};
+    const { paymentStatus, paymentReference, paymentProofUrl } = req.body || {};
+    // La tienda puede mandar solo el comprobante (sin tocar el pago) o "" / null para quitarlo si lo rechazó.
+    const hasStatus = paymentStatus !== undefined && paymentStatus !== null;
+    const hasProof = paymentProofUrl !== undefined;
 
-    if (paymentStatus !== "PAID" && paymentStatus !== "PENDING_VERIFICATION") {
+    if (!hasStatus && !hasProof) {
+      res.status(HttpStatusCode.BadRequest).send({ message: "Envía paymentStatus o paymentProofUrl." });
+      return;
+    }
+    if (hasStatus && paymentStatus !== "PAID" && paymentStatus !== "PENDING_VERIFICATION") {
       res.status(HttpStatusCode.BadRequest).send({ message: "paymentStatus debe ser 'PAID' o 'PENDING_VERIFICATION'." });
+      return;
+    }
+    if (hasProof && paymentProofUrl !== null && paymentProofUrl !== "" && !isProofUrl(paymentProofUrl)) {
+      res.status(HttpStatusCode.BadRequest).send({ message: "paymentProofUrl debe ser una URL https." });
       return;
     }
     if (paymentReference !== undefined && paymentReference !== null && typeof paymentReference !== "string") {
@@ -452,29 +474,50 @@ export async function updateWebOrderPayment(req: Request, res: Response, next: N
       return;
     }
 
-    const previousStatus = order.webOrder.paymentStatus;
-    order.webOrder.paymentStatus = paymentStatus;
-    const reference = optionalString(paymentReference);
-    if (reference) order.webOrder.paymentReference = reference;
-    const webMethod = order.webOrder.paymentMethod || "Transferencia";
-    // Con cobros ya registrados en la app, paymentMethod refleja esos cobros: no se pisa.
-    const hadPayments = (order.payments || []).length > 0;
-    if (!hadPayments) order.paymentMethod = paymentMethodLabel(webMethod, paymentStatus);
     const now = new Date();
     order.updatedBy = WEB_ORDER_CHANNEL;
-    order.auditLog.push({
-      user: WEB_ORDER_CHANNEL,
-      action: paymentStatus === "PAID" ? "Pago verificado desde la tienda online" : "Pago marcado por verificar desde la tienda online",
-      at: now,
-      details: `Estado de pago: ${previousStatus || "—"} → ${paymentStatus}${reference ? ` · Ref. ${reference}` : ""}`,
-    });
-    if (paymentStatus === "PAID" && previousStatus !== "PAID") {
-      const ref = order.webOrder.paymentReference || order.webOrder.code || externalId;
-      if (applyWebPayment(order, webMethod, ref, req.body?.paymentCard || {})) {
-        order.markModified("paymentDetails");
-        order.markModified("payments");
+
+    if (hasProof) {
+      const url = isProofUrl(paymentProofUrl) ? paymentProofUrl.trim() : undefined;
+      if (url && url !== order.webOrder.paymentProofUrl) {
+        order.webOrder.paymentProofUrl = url;
+        order.webOrder.paymentProofAt = now;
+        order.auditLog.push({ user: WEB_ORDER_CHANNEL, action: PROOF_RECEIVED, at: now, details: `Por verificar · ${url}` });
+      } else if (!url && order.webOrder.paymentProofUrl) {
+        order.webOrder.paymentProofUrl = undefined;
+        order.webOrder.paymentProofAt = undefined;
+        order.auditLog.push({
+          user: WEB_ORDER_CHANNEL,
+          action: "Comprobante de transferencia rechazado desde la tienda online",
+          at: now,
+          details: "El cliente debe subir uno nuevo",
+        });
       }
-      queueWebInvoice(order);
+    }
+
+    if (hasStatus) {
+      const previousStatus = order.webOrder.paymentStatus;
+      order.webOrder.paymentStatus = paymentStatus;
+      const reference = optionalString(paymentReference);
+      if (reference) order.webOrder.paymentReference = reference;
+      const webMethod = order.webOrder.paymentMethod || "Transferencia";
+      // Con cobros ya registrados en la app, paymentMethod refleja esos cobros: no se pisa.
+      const hadPayments = (order.payments || []).length > 0;
+      if (!hadPayments) order.paymentMethod = paymentMethodLabel(webMethod, paymentStatus);
+      order.auditLog.push({
+        user: WEB_ORDER_CHANNEL,
+        action: paymentStatus === "PAID" ? "Pago verificado desde la tienda online" : "Pago marcado por verificar desde la tienda online",
+        at: now,
+        details: `Estado de pago: ${previousStatus || "—"} → ${paymentStatus}${reference ? ` · Ref. ${reference}` : ""}`,
+      });
+      if (paymentStatus === "PAID" && previousStatus !== "PAID") {
+        const ref = order.webOrder.paymentReference || order.webOrder.code || externalId;
+        if (applyWebPayment(order, webMethod, ref, req.body?.paymentCard || {})) {
+          order.markModified("paymentDetails");
+          order.markModified("payments");
+        }
+        queueWebInvoice(order);
+      }
     }
     order.markModified("webOrder");
     await order.save();

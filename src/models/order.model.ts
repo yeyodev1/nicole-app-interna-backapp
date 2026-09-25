@@ -54,6 +54,9 @@ export interface IWebOrder {
   deliveryKm?: number;
   /** Sucursal de salida que eligió la tienda (solo delivery). */
   originBranch?: string;
+  /** Foto del comprobante de transferencia que subió el cliente en la tienda (Cloudinary). */
+  paymentProofUrl?: string;
+  paymentProofAt?: Date;
   receivedAt?: Date;
   managedAt?: Date;
   managedBy?: string;
@@ -290,6 +293,8 @@ const OrderSchema = new Schema<IOrder>(
       deliveryReference: { type: String },
       deliveryKm: { type: Number },
       originBranch: { type: String },
+      paymentProofUrl: { type: String },
+      paymentProofAt: { type: Date },
       receivedAt: { type: Date },
       managedAt: { type: Date },
       managedBy: { type: String },
