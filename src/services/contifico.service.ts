@@ -15,6 +15,25 @@ import { isPrecioIvaIncluido } from "../config/precio-final.config";
 import CustomError from "../errors/customError.error";
 
 /**
+ * Identificación del cliente para la factura, según el ID ingresado.
+ * Todo RUC ecuatoriano termina en "001" (también el de empresas), así que el
+ * sufijo no dice nada del tipo. Lo que manda es el tercer dígito:
+ *   0-5 → persona natural (los 10 primeros dígitos son su cédula)
+ *   6   → entidad pública · 9 → sociedad privada → Jurídica, sin cédula
+ * Mandar `cedula` para una empresa hace que Contífico rechace con "Cedula Incorrecta".
+ */
+export function resolveInvoiceIdentity(rawId: string): { ruc: string; cedula: string; tipo: "N" | "J" } {
+  if (rawId.length === 13) {
+    const esNatural = Number(rawId[2]) < 6;
+    return esNatural
+      ? { ruc: rawId, cedula: rawId.slice(0, 10), tipo: "N" }
+      : { ruc: rawId, cedula: "", tipo: "J" };
+  }
+  // Cédula (10 dígitos) → persona Natural
+  return { ruc: rawId + "001", cedula: rawId, tipo: "N" };
+}
+
+/**
  * Pedidos de la tienda online: ningún ítem puede facturarse con el producto de
  * prueba de respaldo. Si alguno no tiene `contifico_id`, se corta antes de llamar
  * a Contífico. Los pedidos manuales conservan el comportamiento de siempre.
@@ -273,23 +292,9 @@ export class ContificoService {
       // tipoIdentificacionComprador="None" y el SRI rechaza: "ARCHIVO NO CUMPLE ESTRUCTURA XML".
       const rawId = (orderData.invoiceData?.ruc || "").replace(/\s+/g, "");
 
-      let computedRuc: string;
-      let computedCedula: string;
-
       // tipo según doc oficial Contifico: N=Natural, J=Juridica, I=SinId, P=Placa
       // "C" NO es un valor válido — causa XML inválido en el SRI.
-      let computedTipo: string;
-      if (rawId.length === 13) {
-        // RUC empresa (no termina en 001) → Juridica; persona natural con RUC (termina en 001) → Natural
-        computedTipo = rawId.endsWith("001") ? "N" : "J";
-        computedRuc = rawId;
-        computedCedula = rawId.endsWith("001") ? rawId.slice(0, 10) : "";
-      } else {
-        // Cédula (10 dígitos) → persona Natural
-        computedTipo = "N";
-        computedRuc = rawId + "001";
-        computedCedula = rawId;
-      }
+      const { ruc: computedRuc, cedula: computedCedula, tipo: computedTipo } = resolveInvoiceIdentity(rawId);
 
       // BLINDAJE SRI: si la persona ya existe en Contifico con tipo "C",
       // intentar corregirla antes de crear la factura.
@@ -1005,14 +1010,7 @@ export class ContificoService {
       const rawId = (orderData.invoiceData?.ruc || "").replace(/\s+/g, "");
 
       // Mismo criterio que createInvoice: tipo según doc oficial (N/J), nunca "C"
-      let ruc: string, cedula: string, tipo: string;
-      if (rawId.length === 13) {
-        ruc = rawId;
-        cedula = rawId.endsWith("001") ? rawId.slice(0, 10) : "";
-        tipo = rawId.endsWith("001") ? "N" : "J";
-      } else {
-        ruc = rawId + "001"; cedula = rawId; tipo = "N";
-      }
+      const { ruc, cedula, tipo } = resolveInvoiceIdentity(rawId);
 
       const payload = {
         id: documentId,
