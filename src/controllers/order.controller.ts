@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import { CONTIFICO_CUENTA_BANCARIA_TRA } from "../config/contifico-cobro.config";
 import { isPrecioIvaIncluido } from "../config/precio-final.config";
-import { HttpStatusCode } from "axios";
+import axios, { HttpStatusCode } from "axios";
 import { models } from "../models";
 import { ContificoService, assertWebOrderProductsLinked } from "../services/contifico.service";
 import CustomError from "../errors/customError.error";
@@ -1516,6 +1516,50 @@ export async function getInvoicePdf(req: AuthRequest, res: Response, next: NextF
 
   } catch (error: any) {
     console.error("Error fetching invoice PDF:", error);
+    res.status(HttpStatusCode.InternalServerError).send({
+      message: "Failed to fetch invoice PDF",
+      error: error.message
+    });
+    return;
+  }
+}
+
+/**
+ * GET /api/orders/:id/invoice-pdf/file
+ * Devuelve el PDF (RIDE) de la factura pasando por el backend. Abrir `url_ride`
+ * directo en el navegador falla con "El objeto que intenta consultar o modificar
+ * no existe" cuando el usuario tiene sesión abierta en la otra empresa de
+ * Contífico (Nicole vs Sucree): el link es público, pero la cookie de sesión lo pisa.
+ */
+export async function getInvoicePdfFile(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    const id = String(req.params.id);
+    const order = await models.orders.findById(id);
+
+    if (!order || !order.invoiceInfo?.id) {
+      res.status(HttpStatusCode.NotFound).send({ message: "Invoice not found for this order." });
+      return;
+    }
+
+    const doc: any = await withCorrectService(
+      id,
+      (order as any).contificoSource,
+      svc => svc.getDocument(order.invoiceInfo.id)
+    );
+
+    if (!doc?.url_ride) {
+      res.status(HttpStatusCode.NotFound).send({ message: "La factura todavía no tiene PDF en Contífico." });
+      return;
+    }
+
+    const pdf = await axios.get(doc.url_ride, { responseType: "arraybuffer" });
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="factura-${doc.documento || id}.pdf"`);
+    res.status(HttpStatusCode.Ok).send(Buffer.from(pdf.data));
+    return;
+
+  } catch (error: any) {
+    console.error("Error fetching invoice PDF file:", error);
     res.status(HttpStatusCode.InternalServerError).send({
       message: "Failed to fetch invoice PDF",
       error: error.message

@@ -52,6 +52,9 @@ router.post("/:id/invoice/generate", OrderController.generateInvoice);
 // GET /api/orders/:id/invoice-pdf
 router.get("/:id/invoice-pdf", OrderController.getInvoicePdf);
 
+// GET /api/orders/:id/invoice-pdf/file — el PDF servido por el backend
+router.get("/:id/invoice-pdf/file", OrderController.getInvoicePdfFile);
+
 // GET /api/orders/:id/invoice/auth-status
 router.get("/:id/invoice/auth-status", OrderController.getInvoiceAuthStatus);
 
