@@ -10,6 +10,7 @@ import { AuthRequest } from "../types/AuthRequest";
 import { Types } from "mongoose";
 import { applyWebPayment, queueWebInvoice } from "./web-order.controller";
 import { applyClientLinkMode, clientLinkUrl, clientWhatsappMessage } from "../services/client-link.service";
+import { normalizeEcPhone, phoneSearchRegex } from "../utils/phone.utils";
 
 const nicoleContificoService = new ContificoService('nicole');
 const sucreeContificoService = new ContificoService('sucree');
@@ -109,6 +110,10 @@ export async function createOrder(req: AuthRequest, res: Response, next: NextFun
       });
       return;
     }
+
+    // Teléfono en un solo formato (09…), lo escriban con 09 o con +593.
+    const normalizedPhone = normalizeEcPhone(orderData.customerPhone);
+    if (normalizedPhone) orderData.customerPhone = normalizedPhone;
 
     // Map deliveryType legacy check
     if (orderData.deliveryType === "pickup") {
@@ -378,12 +383,17 @@ export async function getOrders(req: AuthRequest, res: Response, next: NextFunct
 
     // 1. Search Filter (Name, RUC, Email)
     if (search) {
-      const searchRegex = new RegExp(String(search), 'i');
+      const searchRegex = new RegExp(String(search).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
       query.$or = [
         { customerName: searchRegex },
         { "invoiceData.ruc": searchRegex },
         { "invoiceData.email": searchRegex }
       ];
+      // Teléfono: encuentra igual "0991234567", "+593 99 123 4567" o "99 123 4567".
+      const phoneRegex = phoneSearchRegex(String(search));
+      if (phoneRegex) {
+        query.$or.push({ customerPhone: phoneRegex }, { "clientLink.buyer.phone": phoneRegex });
+      }
     }
 
     // Date Filters
