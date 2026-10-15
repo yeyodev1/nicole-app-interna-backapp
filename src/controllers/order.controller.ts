@@ -79,8 +79,8 @@ export async function createOrder(req: AuthRequest, res: Response, next: NextFun
       details: "Creación inicial del pedido."
     }];
 
-    // 1. Basic Validation
-    if (!orderData.customerName || !orderData.products || orderData.products.length === 0) {
+    // 1. Basic Validation (en la venta con link basta el WhatsApp: el nombre lo pone el cliente)
+    if ((!orderData.customerName && !orderData.clientLink) || !orderData.products || orderData.products.length === 0) {
       res.status(HttpStatusCode.BadRequest).send({
         message: "Customer name and products are required.",
       });
