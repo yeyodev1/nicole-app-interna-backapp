@@ -1,0 +1,30 @@
+name: Client Links Cron
+
+# Ventas con link (v8): recordatorio al cliente y aviso al asesor a las 24 h,
+# plazo de factura de 48 h (Consumidor Final < $50 / aviso al asesor ≥ $50)
+# y correo con el PDF de la factura cuando el SRI la autoriza.
+
+on:
+    schedule:
+        # Cada hora, de 07:00 a 22:00 Ecuador (12:00–03:00 UTC)
+        - cron: "0 0-3,12-23 * * *"
+    workflow_dispatch:
+
+jobs:
+    client-links:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Procesar links de clientes
+              run: |
+                  if [ -z "${{ secrets.API_BASE_URL }}" ]; then
+                      echo "❌ API_BASE_URL no está definida en los Secrets de GitHub."
+                      exit 1
+                  fi
+                  RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${{ secrets.API_BASE_URL }}/api/orders/client-links/cron" \
+                      -H "Content-Type: application/json" \
+                      -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+                      --max-time 120)
+                  HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+                  echo "HTTP Status: $HTTP_CODE"
+                  echo "Respuesta: $(echo "$RESPONSE" | head -n -1)"
+                  if [ "$HTTP_CODE" != "200" ]; then exit 1; fi

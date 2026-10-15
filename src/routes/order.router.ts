@@ -1,5 +1,6 @@
 import express from "express";
 import * as OrderController from "../controllers/order.controller";
+import * as ClientLinkController from "../controllers/client-link.controller";
 import { authMiddleware } from "../middlewares/auth.middleware";
 
 const router = express.Router();
@@ -14,19 +15,25 @@ router.get("/", authMiddleware as any, OrderController.getOrders);
 router.get("/invoice-status", authMiddleware as any, OrderController.getInvoiceStatus);
 
 // GET /api/orders/reports/delivery
-router.get("/reports/delivery", OrderController.getDeliveryReport);
+router.get("/reports/delivery", authMiddleware as any, OrderController.getDeliveryReport);
 
 // GET /api/orders/:id
-router.get("/:id", OrderController.getOrderById);
+router.get("/:id", authMiddleware as any, OrderController.getOrderById);
 
 // PUT /api/orders/:id
 router.put("/:id", authMiddleware as any, OrderController.updateOrder);
 
 // POST /api/orders/bulk-assign
-router.post("/bulk-assign", OrderController.bulkAssignOrders);
+router.post("/bulk-assign", authMiddleware as any, OrderController.bulkAssignOrders);
 
 // POST /api/orders/reassign-delivery
-router.post("/reassign-delivery", OrderController.reassignDelivery);
+router.post("/reassign-delivery", authMiddleware as any, OrderController.reassignDelivery);
+
+// POST /api/orders/client-links/cron (CRON_SECRET) — recordatorios, plazo de factura y PDF por correo
+router.post("/client-links/cron", ClientLinkController.clientLinksCron);
+
+// POST /api/orders/:id/client-link/renew — el link del cliente vale 7 días más
+router.post("/:id/client-link/renew", authMiddleware as any, ClientLinkController.renewClientLink);
 
 // POST /api/orders/batch-invoice (Protected by Cron)
 router.post("/batch-invoice", OrderController.processPendingInvoices);
@@ -41,31 +48,31 @@ router.post("/invoice/sync-authorizations", authMiddleware as any, OrderControll
 router.post("/invoice/generate-missing", authMiddleware as any, OrderController.generateMissingInvoices);
 
 // PUT /api/orders/:id/invoice
-router.put("/:id/invoice", OrderController.updateInvoiceData);
+router.put("/:id/invoice", authMiddleware as any, OrderController.updateInvoiceData);
 
 // POST /api/orders/:id/collection
 router.post("/:id/collection", authMiddleware as any, OrderController.registerCollection);
 
 // POST /api/orders/:id/invoice/generate
-router.post("/:id/invoice/generate", OrderController.generateInvoice);
+router.post("/:id/invoice/generate", authMiddleware as any, OrderController.generateInvoice);
 
 // GET /api/orders/:id/invoice-pdf
-router.get("/:id/invoice-pdf", OrderController.getInvoicePdf);
+router.get("/:id/invoice-pdf", authMiddleware as any, OrderController.getInvoicePdf);
 
 // GET /api/orders/:id/invoice-pdf/file — el PDF servido por el backend
-router.get("/:id/invoice-pdf/file", OrderController.getInvoicePdfFile);
+router.get("/:id/invoice-pdf/file", authMiddleware as any, OrderController.getInvoicePdfFile);
 
 // GET /api/orders/:id/invoice/auth-status
-router.get("/:id/invoice/auth-status", OrderController.getInvoiceAuthStatus);
+router.get("/:id/invoice/auth-status", authMiddleware as any, OrderController.getInvoiceAuthStatus);
 
 // POST /api/orders/:id/invoice/authorize
-router.post("/:id/invoice/authorize", OrderController.triggerInvoiceAuth);
+router.post("/:id/invoice/authorize", authMiddleware as any, OrderController.triggerInvoiceAuth);
 
 // POST /api/orders/:id/invoice/regenerate (elimina doc Contifico roto y lo recrea)
 router.post("/:id/invoice/regenerate", authMiddleware as any, OrderController.regenerateInvoice);
 
 // POST /api/orders/:id/settle-island
-router.post("/:id/settle-island", OrderController.settleOrderInIsland);
+router.post("/:id/settle-island", authMiddleware as any, OrderController.settleOrderInIsland);
 
 // PATCH /api/orders/:id/web-managed — pedido de la tienda online marcado como gestionado
 router.patch("/:id/web-managed", authMiddleware as any, OrderController.markWebOrderManaged);
@@ -80,6 +87,6 @@ router.post("/:id/web-transfer/reject-proof", authMiddleware as any, OrderContro
 router.put("/:id/return", authMiddleware as any, OrderController.returnOrder);
 
 // DELETE /api/orders/:id
-router.delete("/:id", OrderController.deleteOrder);
+router.delete("/:id", authMiddleware as any, OrderController.deleteOrder);
 
 export default router;

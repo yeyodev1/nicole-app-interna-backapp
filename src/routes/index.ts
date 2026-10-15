@@ -22,6 +22,8 @@ import RequisitionRouter from "./requisition.router";
 import WarehouseLoanRouter from "./warehouse-loan.router";
 import SellerRouter from "./seller.router";
 import WebOrderRouter from "./web-order.router";
+import NotificationRouter from "./notification.router";
+import PayphoneRouter from "./payphone.router";
 
 import { WarehouseRouter } from "./warehouse.routes";
 
@@ -47,6 +49,8 @@ function routerApi(app: Application) {
   router.use("/branches", BranchRouter);
   router.use("/sellers", SellerRouter);
   router.use("/web-orders", WebOrderRouter);
+  router.use("/notifications", NotificationRouter);
+  router.use("/payphone", PayphoneRouter);
 
   router.use("/provider-categories", ProviderCategoryRouter);
   router.use("/warehouse", WarehouseRouter);
