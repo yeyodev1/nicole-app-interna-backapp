@@ -9,6 +9,7 @@ import { getECDateRange } from "../utils/date.utils";
 import { AuthRequest } from "../types/AuthRequest";
 import { Types } from "mongoose";
 import { applyWebPayment, queueWebInvoice } from "./web-order.controller";
+import { applyClientLinkMode, clientLinkUrl, clientWhatsappMessage } from "../services/client-link.service";
 
 const nicoleContificoService = new ContificoService('nicole');
 const sucreeContificoService = new ContificoService('sucree');
@@ -86,7 +87,23 @@ export async function createOrder(req: AuthRequest, res: Response, next: NextFun
       return;
     }
 
-    if (!orderData.deliveryTime) {
+    // Venta con link (v8): el asesor solo cobra; entrega, fecha y factura las pone el cliente.
+    const isClientLink = !!orderData.clientLink;
+    if (isClientLink) {
+      try {
+        applyClientLinkMode(orderData, currentUser);
+      } catch (err) {
+        if (err instanceof CustomError) {
+          res.status(err.status).send({ message: err.message });
+          return;
+        }
+        throw err;
+      }
+    } else {
+      delete orderData.clientLink;
+    }
+
+    if (!isClientLink && !orderData.deliveryTime) {
       res.status(HttpStatusCode.BadRequest).send({
         message: "Delivery time is required.",
       });
@@ -99,7 +116,7 @@ export async function createOrder(req: AuthRequest, res: Response, next: NextFun
     }
 
     // STRICT VALIDATION: Delivery Requirements
-    if (orderData.deliveryType === "delivery") {
+    if (!isClientLink && orderData.deliveryType === "delivery") {
       if (!orderData.googleMapsLink || !orderData.deliveryAddress) {
         res.status(HttpStatusCode.BadRequest).send({
           message: "For Delivery orders, Google Maps Link and Delivery Address are mandatory.",
@@ -131,8 +148,21 @@ export async function createOrder(req: AuthRequest, res: Response, next: NextFun
       orderData.sellerIdentification = seller.identification;
       orderData.sellerName = seller.name;
     } else {
-      delete orderData.sellerIdentification;
-      delete orderData.sellerName;
+      // Sin vendedor elegido: el asesor logueado, si está en el catálogo con su mismo nombre.
+      const ownSeller = currentUser?.name
+        ? await models.sellers.findOne({
+            contificoSource: orderData.contificoSource,
+            isActive: true,
+            name: { $regex: new RegExp(`^${String(currentUser.name).trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
+          })
+        : null;
+      if (ownSeller) {
+        orderData.sellerIdentification = ownSeller.identification;
+        orderData.sellerName = ownSeller.name;
+      } else {
+        delete orderData.sellerIdentification;
+        delete orderData.sellerName;
+      }
     }
 
     // Default defaults
@@ -141,7 +171,7 @@ export async function createOrder(req: AuthRequest, res: Response, next: NextFun
     if (!orderData.paymentMethod) orderData.paymentMethod = "Por confirmar";
 
     // Si es retiro directo de tienda, marcar como finalizado en producción
-    if (orderData.skipProduction === true) {
+    if (orderData.skipProduction === true && !isClientLink) {
       orderData.productionStage = "FINISHED";
     }
 
@@ -219,9 +249,24 @@ export async function createOrder(req: AuthRequest, res: Response, next: NextFun
       }
     }
 
+    if (isClientLink) {
+      orderData.clientLink.estimatedDeliveryValue = Number(orderData.deliveryValue) || 0;
+      orderData.auditLog[0].details = "Venta con link: el cliente completa la entrega y la factura.";
+    }
+
     // 2. Save Order to Database
     const newOrder = new models.orders(orderData);
     await newOrder.save();
+
+    if (isClientLink) {
+      res.status(HttpStatusCode.Created).send({
+        message: "Order created successfully.",
+        order: newOrder,
+        clientLinkUrl: clientLinkUrl(newOrder.clientLink!.token),
+        clientWhatsappMessage: clientWhatsappMessage(newOrder),
+      });
+      return;
+    }
 
     // 3. Generate WhatsApp Message (Strict Format)
     /*
@@ -387,6 +432,10 @@ export async function getOrders(req: AuthRequest, res: Response, next: NextFunct
     // 5. Tienda online: pendientes de gestionar y filtro por canal de venta
     if (webPending) {
       query.status = 'PENDIENTE_GESTION';
+    }
+    // Ventas con link que el cliente todavía no completa (los SALES_REP ven solo las suyas).
+    if (req.query.clientLinkPending === 'true') {
+      query['clientLink.status'] = 'PENDING';
     }
     if (typeof req.query.salesChannel === 'string' && req.query.salesChannel) {
       query.salesChannel = req.query.salesChannel;
@@ -1163,7 +1212,10 @@ export async function registerCollection(req: AuthRequest, res: Response, next: 
       // Offline/Queued Mode
       // Ensure invoiceNeeded is true so batch picks it up.
       // Pedidos web sin RUC: no se encolan (saldría una factura automática con datos vacíos).
-      const skipAutoInvoice = !!order.webOrder?.externalId && !String(order.invoiceData?.ruc || '').trim();
+      // Venta con link pendiente: la factura la decide el cliente (o el plazo de 48 h).
+      const skipAutoInvoice =
+        (!!order.webOrder?.externalId && !String(order.invoiceData?.ruc || '').trim()) ||
+        ((order as any).clientLink?.status === 'PENDING' && !String(order.invoiceData?.ruc || '').trim());
       if (!order.invoiceNeeded && !skipAutoInvoice) {
         order.invoiceNeeded = true;
         order.invoiceStatus = "PENDING";

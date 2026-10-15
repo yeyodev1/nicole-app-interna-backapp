@@ -69,4 +69,76 @@ export class EmailService {
 
     return data;
   }
+
+  /**
+   * Correo genérico con la plantilla de la marca. `bodyHtml` va dentro de la
+   * tarjeta; `cta` agrega el botón. No lanza: devuelve false si Resend falla,
+   * para que un correo caído no tumbe el flujo que lo dispara.
+   */
+  async sendBranded(params: {
+    to: string | string[];
+    subject: string;
+    bodyHtml: string;
+    cta?: { label: string; url: string };
+    attachments?: Array<{ filename: string; content: Buffer }>;
+  }): Promise<boolean> {
+    const recipients = (Array.isArray(params.to) ? params.to : [params.to]).filter(Boolean);
+    if (!recipients.length || !process.env.RESEND_API_KEY) return false;
+
+    const button = params.cta
+      ? `<tr><td align="center" style="padding:24px 0 8px;">
+          <a href="${params.cta.url}" style="background:#7c3aed;color:#ffffff;text-decoration:none;padding:14px 32px;border-radius:10px;font-weight:bold;font-size:15px;display:inline-block;">${params.cta.label}</a>
+        </td></tr>`
+      : "";
+
+    const html = `
+<!DOCTYPE html>
+<html lang="es">
+<body style="margin:0;padding:0;background-color:#faf7f2;font-family:Arial,Helvetica,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#faf7f2;padding:32px 0;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:16px;padding:40px;box-shadow:0 4px 12px rgba(124,58,237,0.08);">
+          <tr>
+            <td align="center" style="padding-bottom:24px;">
+              <h1 style="margin:0;color:#7c3aed;font-size:22px;">Nicole Pastry Arts</h1>
+            </td>
+          </tr>
+          <tr><td style="color:#374151;font-size:15px;line-height:1.6;">${params.bodyHtml}</td></tr>
+          ${button}
+        </table>
+        <p style="color:#9ca3af;font-size:12px;margin-top:16px;">© Nicole Pastry Arts</p>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
+    try {
+      const { error } = await this.resend.emails.send({
+        from: FROM_ADDRESS,
+        to: recipients,
+        subject: params.subject,
+        html,
+        ...(params.attachments?.length ? { attachments: params.attachments } : {}),
+      });
+      if (error) {
+        console.error("❌ Error enviando correo:", error);
+        return false;
+      }
+      return true;
+    } catch (err) {
+      console.error("❌ Error enviando correo:", err);
+      return false;
+    }
+  }
+}
+
+/** Escapa texto que viene de usuarios antes de meterlo en un HTML de correo. */
+export function escapeHtml(value: unknown): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
