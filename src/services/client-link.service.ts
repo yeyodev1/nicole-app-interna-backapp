@@ -169,7 +169,7 @@ export function clientWhatsappMessage(order: any): string {
     `Ahora completa en este link ${what}, la fecha y hora, y tus datos si necesitas factura:`,
     clientLinkUrl(link.token),
     "",
-    "Entregamos desde el día siguiente, de 11h00 a 18h00. El link vence en 7 días.",
+    "Entregamos desde el día siguiente, de 11h00 a 19h00. El link vence en 7 días.",
   ].join("\n");
 }
 
@@ -381,6 +381,7 @@ export async function completeClientLink(token: string, body: any) {
 
   const when = `${date.split("-").reverse().join("/")} ${time}`;
   const where = order.deliveryType === "delivery" ? `delivery a ${link.deliveryAddressRaw}` : `retiro en ${order.branch}`;
+  await sendClientConfirmation(order, { when, invoice: !!invoice });
   await notifyAdvisor(order, {
     type: "CLIENT_LINK_COMPLETED",
     title: `${buyer.name || recipientName} completó su pedido`,
@@ -397,6 +398,37 @@ export async function completeClientLink(token: string, body: any) {
   }
 
   return { ok: true, status: "COMPLETED" as const };
+}
+
+/** Correo al cliente con lo que eligió: se manda una vez, al confirmar el link. */
+async function sendClientConfirmation(order: any, opts: { when: string; invoice: boolean }) {
+  const link = order.clientLink;
+  const to = link.customerEmail || order.invoiceData?.email;
+  if (!to || to === "noname@noname.com") return;
+  const isDelivery = order.deliveryType === "delivery";
+  const items = (order.products || [])
+    .filter((p: any) => !/delivery|env[ií]o/i.test(String(p.name || "")))
+    .map(
+      (p: any) =>
+        `<li>${escapeHtml(p.quantity)} × ${escapeHtml(p.name)}${p.customerNote ? ` <em>(${escapeHtml(p.customerNote)})</em>` : ""}</li>`
+    )
+    .join("");
+  const place = isDelivery
+    ? `<strong>Entrega en:</strong> ${escapeHtml(link.deliveryAddressRaw || order.deliveryAddress)}${
+        link.deliveryReference ? ` · ${escapeHtml(link.deliveryReference)}` : ""
+      }`
+    : `<strong>Retiro en:</strong> ${escapeHtml(order.branch)}`;
+  await emailService.sendBranded({
+    to,
+    subject: "Tu pedido quedó agendado — Nicole Pastry",
+    bodyHtml: `<p>Hola ${escapeHtml(firstName(order.customerName))},</p>
+      <p>¡Listo! Tu pedido quedó agendado. Esto es lo que nos indicaste:</p>
+      <p><strong>Fecha y hora:</strong> ${escapeHtml(opts.when.replace(":", "h"))}<br>${place}<br>
+      <strong>Recibe:</strong> ${escapeHtml(order.customerName)} · ${escapeHtml(order.customerPhone)}</p>
+      <ul style="padding-left:18px;margin:12px 0;">${items}</ul>
+      <p><strong>Total pagado:</strong> ${money(order.totalValue)}</p>
+      <p>${opts.invoice ? "Te enviaremos la factura a este correo cuando el SRI la autorice." : "Si necesitas un cambio, escríbele a tu asesor."}</p>`,
+  });
 }
 
 /**
@@ -518,7 +550,7 @@ export async function runClientLinkCron() {
             <p>Ya recibimos tu pago de <strong>${money(order.totalValue)}</strong>. Solo falta que nos digas ${
               link.plannedType === "delivery" ? "dónde entregamos tu pedido" : "en qué tienda lo retiras"
             } y la fecha.</p>
-            <p>Entregamos desde el día siguiente, de 11h00 a 18h00. El link vence el ${new Date(link.expiresAt).toLocaleDateString("es-EC", { timeZone: "America/Guayaquil" })}.</p>`,
+            <p>Entregamos desde el día siguiente, de 11h00 a 19h00. El link vence el ${new Date(link.expiresAt).toLocaleDateString("es-EC", { timeZone: "America/Guayaquil" })}.</p>`,
           cta: { label: "Completar mi pedido", url: clientLinkUrl(link.token) },
         });
         if (sent) {
