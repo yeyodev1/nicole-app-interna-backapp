@@ -33,7 +33,7 @@ const HOUR_MS = 3600 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 const CONSUMIDOR_FINAL_RUC = "9999999999999";
 
-const TIENDA_PUBLIC_URL = () => (process.env.TIENDA_PUBLIC_URL || "https://nicolepastry.com.ec").replace(/\/+$/, "");
+const TIENDA_PUBLIC_URL = () => (process.env.TIENDA_PUBLIC_URL || "https://nicole.com.ec").replace(/\/+$/, "");
 const FRONTEND_URL = () => (process.env.FRONTEND_URL || "https://app.nicole.com.ec").replace(/\/+$/, "");
 
 // Perezoso: Resend lanza al construirse sin RESEND_API_KEY.
