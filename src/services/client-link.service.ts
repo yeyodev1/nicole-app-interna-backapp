@@ -7,6 +7,7 @@ import { EmailService, escapeHtml } from "./email.service";
 import { ContificoService } from "./contifico.service";
 import { issueInvoiceNow } from "./invoice-issue.service";
 import type { NotificationType } from "../models/notification.model";
+import { normalizeEcPhone } from "../utils/phone.utils";
 
 /**
  * Link de gestión de entrega (contrato v8).
@@ -104,8 +105,11 @@ export function applyClientLinkMode(orderData: any, advisor: any): void {
   const plannedType = input.plannedType === "retiro" || input.plannedType === "pickup" ? "retiro" : input.plannedType === "delivery" ? "delivery" : null;
   if (!plannedType) throw new CustomError("Elige si el pedido es entrega a domicilio o retiro en isla.", 400);
 
-  const phone = String(orderData.customerPhone || "").replace(/\D/g, "");
-  if (phone.length < 9) throw new CustomError("El WhatsApp del cliente es obligatorio para mandarle el link.", 400);
+  // 09… o +593…: se guarda siempre como 09XXXXXXXX.
+  const phone = normalizeEcPhone(orderData.customerPhone);
+  if (!/^09\d{8}$/.test(phone)) {
+    throw new CustomError("Escribe el WhatsApp del cliente: 09XXXXXXXX o +593 9XXXXXXXX.", 400);
+  }
 
   const customerEmail = str(input.customerEmail, 200).toLowerCase();
   if (customerEmail && !isEmail(customerEmail)) throw new CustomError("El correo del cliente no es válido.", 400);
@@ -115,6 +119,10 @@ export function applyClientLinkMode(orderData: any, advisor: any): void {
     throw new CustomError("Un pedido de retiro no lleva envío. Quita la línea de Delivery o cámbialo a entrega.", 400);
   }
 
+  // Basta el WhatsApp: si el asesor no puso nombre, el cliente lo escribe en el link.
+  const buyerName = str(orderData.customerName, 120);
+  orderData.customerName = buyerName || `Cliente ${phone}`;
+
   const now = new Date();
   orderData.clientLink = {
     token: newClientLinkToken(),
@@ -122,7 +130,7 @@ export function applyClientLinkMode(orderData: any, advisor: any): void {
     plannedType,
     estimatedDeliveryValue: 0, // se completa después de calcular deliveryValue
     ...(customerEmail ? { customerEmail } : {}),
-    buyer: { name: str(orderData.customerName, 120), phone },
+    buyer: { name: buyerName, phone },
     advisorUserId: advisor?._id || advisor?.id ? String(advisor._id || advisor.id) : undefined,
     advisorName: advisor?.name,
     advisorEmail: advisor?.email,
@@ -153,7 +161,7 @@ export function clientWhatsappMessage(order: any): string {
     .join("\n");
   const what = link.plannedType === "delivery" ? "la dirección de entrega (con el pin en el mapa)" : "la tienda donde lo retiras";
   return [
-    `¡Hola ${firstName(link.buyer?.name) || ""}! Gracias por tu compra en Nicole Pastry Arts 💜`,
+    `¡Hola${firstName(link.buyer?.name) ? ` ${firstName(link.buyer?.name)}` : ""}! Gracias por tu compra en Nicole Pastry Arts 💜`,
     "",
     `Recibimos tu pago de ${money(order.totalValue)}:`,
     items,
@@ -184,7 +192,11 @@ export function publicClientLinkView(order: any) {
   return {
     status,
     orderNumber: order.orderNumber || null,
-    buyerName: firstName(link.buyer?.name || order.customerName),
+    buyerName: firstName(link.buyer?.name),
+    /** El WhatsApp con el que se vendió: el cliente lo ve pero no lo cambia. */
+    buyerPhone: link.buyer?.phone || order.customerPhone,
+    /** false → el link pide el nombre del cliente (el asesor solo puso el WhatsApp). */
+    buyerNameKnown: !!str(link.buyer?.name),
     plannedType: link.plannedType,
     items: (order.products || [])
       .filter((p: any) => !isDeliveryLine(p))
@@ -260,8 +272,21 @@ export async function completeClientLink(token: string, body: any) {
   if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) throw new CustomError("Elige un horario válido.", 400);
   if (date <= todayInGuayaquil()) throw new CustomError("No hacemos entregas el mismo día. Elige desde mañana.", 400);
 
-  const recipientName = str(body.recipient?.name, 120);
-  const recipientPhone = String(body.recipient?.phone || "").replace(/\D/g, "");
+  // Recibe quien llena el link (si es para otra persona, el cliente le reenvía el link).
+  // El WhatsApp de la venta queda como el del comprador; si faltaba su nombre, se toma
+  // el que llegue (buyer.name o el de quien recibe).
+  const buyerNameInput = str(body.buyer?.name, 120) || (body.recipient?.self ? "" : str(body.recipient?.name, 120));
+  if (!str(link.buyer?.name)) {
+    if (!buyerNameInput) throw new CustomError("Escribe tu nombre.", 400);
+    link.buyer = { name: buyerNameInput, phone: link.buyer?.phone || order.customerPhone };
+  }
+
+  // "Yo mismo recibo": recibe el mismo cliente, con su WhatsApp.
+  const selfReceives = body.recipient?.self === true;
+  const recipientName = selfReceives ? str(link.buyer?.name, 120) : str(body.recipient?.name, 120);
+  const recipientPhone = selfReceives
+    ? normalizeEcPhone(link.buyer?.phone)
+    : normalizeEcPhone(body.recipient?.phone);
   if (!recipientName) throw new CustomError("Escribe el nombre de quien recibe.", 400);
   if (recipientPhone.length < 9) throw new CustomError("Escribe un teléfono válido de quien recibe.", 400);
 
@@ -307,7 +332,7 @@ export async function completeClientLink(token: string, body: any) {
   }
 
   // Quién recibe pasa a customerName/Phone (motorizado, lista, WhatsApp), igual que la tienda v7.
-  const buyer = link.buyer || { name: order.customerName, phone: order.customerPhone };
+  const buyer = link.buyer;
   order.customerName = recipientName;
   order.customerPhone = recipientPhone;
   const extra = [
