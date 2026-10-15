@@ -9,7 +9,8 @@ export type NotificationType =
   | "CLIENT_LINK_COMPLETED"
   | "CLIENT_LINK_PENDING"
   | "CLIENT_LINK_INVOICE_NEEDED"
-  | "CLIENT_LINK_INVOICE_ERROR";
+  | "CLIENT_LINK_INVOICE_ERROR"
+  | "WEB_ORDER_NEW";
 
 export interface INotification extends Document {
   user: Types.ObjectId;
@@ -27,7 +28,7 @@ const NotificationSchema = new Schema<INotification>(
     user: { type: Schema.Types.ObjectId, ref: "User", required: true },
     type: {
       type: String,
-      enum: ["CLIENT_LINK_COMPLETED", "CLIENT_LINK_PENDING", "CLIENT_LINK_INVOICE_NEEDED", "CLIENT_LINK_INVOICE_ERROR"],
+      enum: ["CLIENT_LINK_COMPLETED", "CLIENT_LINK_PENDING", "CLIENT_LINK_INVOICE_NEEDED", "CLIENT_LINK_INVOICE_ERROR", "WEB_ORDER_NEW"],
       required: true,
     },
     title: { type: String, required: true },

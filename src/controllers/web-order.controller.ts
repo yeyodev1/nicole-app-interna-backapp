@@ -237,6 +237,25 @@ function matchContificoIdByName(catalog: any[], name: string): string | undefine
  * POST /api/web-orders
  * Crea el pedido de la tienda online. Idempotente por `externalId`.
  */
+/** Aviso en la campana (con sonido) a todo el equipo de ventas por cada pedido web nuevo. */
+async function notifySalesTeamWebOrder(order: any) {
+  const users = await models.users
+    .find({ role: { $in: ["SALES_MANAGER", "SALES_REP", "sales", "superadmin", "admin"] }, contificoSource: { $ne: "sucree" } })
+    .select("_id")
+    .lean();
+  if (!users.length) return;
+  const when = order.deliveryDate ? new Date(order.deliveryDate).toISOString().slice(0, 10).split("-").reverse().join("/") : "";
+  await models.notifications.insertMany(
+    users.map((u: any) => ({
+      user: u._id,
+      type: "WEB_ORDER_NEW",
+      title: `Nuevo pedido web · ${order.customerName}`,
+      message: `$${Number(order.totalValue || 0).toFixed(2)} · ${order.deliveryType === "delivery" ? "Delivery" : `Retiro en ${order.branch || "tienda"}`}${when ? ` · ${when} ${order.deliveryTime || ""}` : ""}`,
+      orderId: order._id,
+    }))
+  );
+}
+
 export async function createWebOrder(req: Request, res: Response, next: NextFunction) {
   try {
     const body = req.body;
@@ -433,6 +452,7 @@ export async function createWebOrder(req: Request, res: Response, next: NextFunc
     try {
       const order = await models.orders.create(orderData);
       console.log(`🛒 [web-orders] Pedido web ${code} creado (${order._id})`);
+      notifySalesTeamWebOrder(order).catch((err) => console.error("⚠️ Aviso de pedido web no enviado:", err));
       res.status(HttpStatusCode.Created).send({ id: String(order._id), status: "created" });
     } catch (error: any) {
       // Dos llamadas simultáneas con el mismo externalId: gana la primera.
