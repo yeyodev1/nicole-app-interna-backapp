@@ -18,6 +18,7 @@ import { InternalRequisitionModel } from "./internal-requisition.model";
 import { WarehouseLoanModel } from "./warehouse-loan.model";
 import { SellerModel } from "./seller.model";
 import { InvoiceSequenceModel } from "./invoice-sequence.model";
+import { NotificationModel } from "./notification.model";
 
 export const models = {
   orders: OrderModel,
@@ -40,4 +41,5 @@ export const models = {
   warehouseLoans: WarehouseLoanModel,
   sellers: SellerModel,
   invoiceSequences: InvoiceSequenceModel,
+  notifications: NotificationModel,
 };

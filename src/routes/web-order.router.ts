@@ -1,5 +1,6 @@
 import express from "express";
 import * as WebOrderController from "../controllers/web-order.controller";
+import * as ClientLinkController from "../controllers/client-link.controller";
 import { webOrdersApiKeyMiddleware } from "../middlewares/webOrdersApiKey.middleware";
 
 /**
@@ -18,6 +19,12 @@ router.get("/status", WebOrderController.getWebOrderStatuses);
 
 // GET /api/web-orders/notify-recipients (correos de administradores de ventas para los avisos)
 router.get("/notify-recipients", WebOrderController.getNotifyRecipients);
+
+// GET /api/web-orders/client-links/:token — link de gestión de entrega (v8)
+router.get("/client-links/:token", ClientLinkController.getClientLinkPublic);
+
+// POST /api/web-orders/client-links/:token/complete
+router.post("/client-links/:token/complete", ClientLinkController.completeClientLinkPublic);
 
 // POST /api/web-orders
 router.post("/", WebOrderController.createWebOrder);

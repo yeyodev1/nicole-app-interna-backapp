@@ -1,7 +1,10 @@
 import { Router } from "express";
 import * as DeliveryPersonController from "../controllers/delivery-person.controller";
+import { authMiddleware } from "../middlewares/auth.middleware";
 
 const router = Router();
+
+router.use(authMiddleware as any);
 
 // GET /api/delivery-persons
 router.get("/", DeliveryPersonController.getDeliveryPersons);

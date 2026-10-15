@@ -18,7 +18,7 @@ export class ProductionService {
 
     for (const task of tasks) {
       // If delivery date has passed and it's not finished, mark as DELAYED
-      if (task.deliveryDate < now && task.productionStage !== "DELAYED") {
+      if (task.deliveryDate && task.deliveryDate < now && task.productionStage !== "DELAYED") {
         task.productionStage = "DELAYED";
         await task.save();
       }
@@ -49,6 +49,8 @@ export class ProductionService {
       sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
       sevenDaysAgo.setHours(0, 0, 0, 0);
       matchQuery = {
+        // Ventas con link sin completar: todavía no tienen fecha ni entran a producción.
+        productionStage: { $ne: "AWAITING_CLIENT" },
         $or: [
           { dispatchStatus: { $nin: ["SENT", "RETURNED"] } },
           { dispatchStatus: "SENT", deliveryDate: { $gte: sevenDaysAgo } }
@@ -832,7 +834,8 @@ export class ProductionService {
       // We look for orders that represent demand. 
       // They could be in any production stage, but dispatch usually implies they are ready or being sent.
       // We generally want to fulfill orders that are NOT full 'SENT'.
-      dispatchStatus: { $ne: 'SENT' }
+      dispatchStatus: { $ne: 'SENT' },
+      productionStage: { $ne: 'AWAITING_CLIENT' }
     };
 
     if (destination === 'Domicilio / Delivery') {

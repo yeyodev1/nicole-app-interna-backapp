@@ -10,6 +10,8 @@ export interface IOrderProduct {
   productionStatus?: "PENDING" | "IN_PROCESS" | "COMPLETED";
   productionNotes?: string;
   isCourtesy?: boolean;
+  /** Nota del cliente para este producto (link de gestión), ej. el mensaje de la torta. */
+  customerNote?: string;
 }
 
 export interface IDispatchItem {
@@ -66,6 +68,43 @@ export interface IWebOrder {
   managedBy?: string;
 }
 
+/**
+ * Link de gestión de entrega (v8). El asesor cobra y el cliente completa la
+ * entrega y la factura en la tienda (`/pedido/:token`). Mientras está PENDING el
+ * pedido no tiene fecha (`deliveryDate: null`) y producción no lo ve
+ * (`productionStage: AWAITING_CLIENT`). Ver services/client-link.service.ts.
+ */
+export interface IClientLink {
+  token: string;
+  status: "PENDING" | "COMPLETED";
+  /** Lo decide el asesor al cobrar: el cliente no puede cambiarlo. */
+  plannedType: "delivery" | "retiro";
+  /** Envío que cobró el asesor (IVA incluido). La diferencia con el real se absorbe. */
+  estimatedDeliveryValue: number;
+  customerEmail?: string;
+  /** Quién pagó. Al completar, customerName/customerPhone pasan a quien recibe. */
+  buyer: { name: string; phone: string };
+  advisorUserId?: string;
+  advisorName?: string;
+  advisorEmail?: string;
+  createdAt: Date;
+  expiresAt: Date;
+  completedAt?: Date;
+  invoiceDeadlineAt: Date;
+  invoiceDeadlineHandled?: "CONSUMIDOR_FINAL" | "ADVISOR_NOTIFIED" | "CLIENT_DATA";
+  clientRemindedAt?: Date;
+  advisorRemindedAt?: Date;
+  invoiceEmailedAt?: Date;
+  lat?: number;
+  lng?: number;
+  deliveryKm?: number;
+  deliveryReference?: string;
+  /** Dirección tal cual la escribió el cliente (deliveryAddress lleva además la referencia). */
+  deliveryAddressRaw?: string;
+  clientNotes?: string;
+  acceptedTermsAt?: Date;
+}
+
 export interface IOrder extends Document {
   deliveryPerson?: {
     name: string;
@@ -73,7 +112,8 @@ export interface IOrder extends Document {
     personId?: Types.ObjectId;
   };
   orderDate: Date;
-  deliveryDate: Date;
+  /** null solo mientras el link de gestión está pendiente. */
+  deliveryDate: Date | null;
   deliveryTime?: string;
   customerName: string;
   customerPhone: string;
@@ -115,7 +155,7 @@ export interface IOrder extends Document {
   invoiceInfo?: any;
   invoiceSentToSriAt?: Date;
   contificoSource?: 'nicole' | 'sucree';
-  productionStage: "PENDING" | "IN_PROCESS" | "FINISHED" | "DELAYED" | "VOID";
+  productionStage: "PENDING" | "IN_PROCESS" | "FINISHED" | "DELAYED" | "VOID" | "AWAITING_CLIENT";
   productionNotes: string;
   voidedAt: Date | null;
   settledInIsland: boolean;
@@ -154,6 +194,7 @@ export interface IOrder extends Document {
   status?: string; // Top level status (e.g. DELIVERED). Pedidos web: PENDIENTE_GESTION → GESTIONADO
   /** Sólo en pedidos que llegan de la tienda online (`/api/web-orders`). */
   webOrder?: IWebOrder;
+  clientLink?: IClientLink;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -194,7 +235,14 @@ const OrderSchema = new Schema<IOrder>(
       personId: { type: Schema.Types.ObjectId, ref: "DeliveryPerson" }
     },
     orderDate: { type: Date, required: true },
-    deliveryDate: { type: Date, required: true },
+    deliveryDate: {
+      type: Date,
+      // Sin fecha solo mientras el cliente no completa su link de gestión.
+      required: function (this: any) {
+        return this.clientLink?.status !== "PENDING";
+      },
+      default: undefined,
+    },
     deliveryTime: { type: String, required: false },
     customerName: { type: String, required: true },
     customerPhone: { type: String, required: true },
@@ -212,7 +260,8 @@ const OrderSchema = new Schema<IOrder>(
           default: "PENDING"
         },
         productionNotes: { type: String },
-        isCourtesy: { type: Boolean, default: false }
+        isCourtesy: { type: Boolean, default: false },
+        customerNote: { type: String, trim: true, maxlength: 300 }
       },
     ],
     deliveryType: {
@@ -268,7 +317,7 @@ const OrderSchema = new Schema<IOrder>(
     // Production Fields
     productionStage: {
       type: String,
-      enum: ["PENDING", "IN_PROCESS", "FINISHED", "DELAYED", "VOID"],
+      enum: ["PENDING", "IN_PROCESS", "FINISHED", "DELAYED", "VOID", "AWAITING_CLIENT"],
       default: "PENDING"
     },
     productionNotes: { type: String, default: "" },
@@ -317,6 +366,41 @@ const OrderSchema = new Schema<IOrder>(
       managedBy: { type: String },
     },
 
+    // Link de gestión de entrega (v8). Subdocumento con default undefined para que
+    // el índice sparse del token ignore los pedidos que no lo tienen.
+    clientLink: {
+      type: new Schema<IClientLink>(
+        {
+          token: { type: String, required: true },
+          status: { type: String, enum: ["PENDING", "COMPLETED"], default: "PENDING" },
+          plannedType: { type: String, enum: ["delivery", "retiro"], required: true },
+          estimatedDeliveryValue: { type: Number, default: 0 },
+          customerEmail: { type: String, trim: true, lowercase: true },
+          buyer: { type: new Schema({ name: String, phone: String }, { _id: false }) },
+          advisorUserId: String,
+          advisorName: String,
+          advisorEmail: String,
+          createdAt: { type: Date, default: Date.now },
+          expiresAt: { type: Date, required: true },
+          completedAt: Date,
+          invoiceDeadlineAt: { type: Date, required: true },
+          invoiceDeadlineHandled: { type: String, enum: ["CONSUMIDOR_FINAL", "ADVISOR_NOTIFIED", "CLIENT_DATA"] },
+          clientRemindedAt: Date,
+          advisorRemindedAt: Date,
+          invoiceEmailedAt: Date,
+          lat: Number,
+          lng: Number,
+          deliveryKm: Number,
+          deliveryReference: String,
+          deliveryAddressRaw: String,
+          clientNotes: String,
+          acceptedTermsAt: Date,
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
+
     paymentDetails: {
       forma_cobro: String,
       monto: Number,
@@ -350,5 +434,8 @@ const OrderSchema = new Schema<IOrder>(
 // Idempotencia de la tienda online: un externalId = un pedido. Sparse para que los
 // pedidos manuales (sin webOrder) no choquen entre sí.
 OrderSchema.index({ "webOrder.externalId": 1 }, { unique: true, sparse: true });
+
+OrderSchema.index({ "clientLink.token": 1 }, { unique: true, sparse: true });
+OrderSchema.index({ "clientLink.status": 1, "clientLink.createdAt": 1 }, { sparse: true });
 
 export const OrderModel = model<IOrder>("Order", OrderSchema);
