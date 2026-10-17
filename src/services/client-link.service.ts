@@ -153,6 +153,9 @@ export function applyClientLinkMode(orderData: any, advisor: any): void {
   orderData.skipProduction = false;
 }
 
+/** Horario de entrega del link, igual que `LINK_SAME_DAY_LEAD_HOURS` de la tienda. */
+const SCHEDULE_TEXT = "Entregamos de 11h00 a 19h00, también hoy mismo si faltan al menos 2 horas.";
+
 export function clientWhatsappMessage(order: any): string {
   const link = order.clientLink;
   const items = (order.products || [])
@@ -169,7 +172,7 @@ export function clientWhatsappMessage(order: any): string {
     `Ahora completa en este link ${what}, la fecha y hora, y tus datos si necesitas factura:`,
     clientLinkUrl(link.token),
     "",
-    "Entregamos desde el día siguiente, de 11h00 a 19h00. El link vence en 7 días.",
+    `${SCHEDULE_TEXT} El link vence en 7 días.`,
   ].join("\n");
 }
 
@@ -265,12 +268,12 @@ export async function completeClientLink(token: string, body: any) {
     );
   }
 
-  // Fecha y hora: la tienda valida la regla del admin; aquí solo que no sea pasada.
+  // Fecha y hora: la tienda valida la regla (hoy se puede con 2 h de anticipación); aquí solo que no sea pasada.
   const date = str(body.date, 10);
   const time = str(body.time, 5);
   if (!isValidYmd(date)) throw new CustomError("Elige una fecha de entrega válida.", 400);
   if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) throw new CustomError("Elige un horario válido.", 400);
-  if (date <= todayInGuayaquil()) throw new CustomError("No hacemos entregas el mismo día. Elige desde mañana.", 400);
+  if (date < todayInGuayaquil()) throw new CustomError("La fecha de entrega ya pasó. Elige hoy o un día posterior.", 400);
 
   // Recibe quien llena el link (si es para otra persona, el cliente le reenvía el link).
   // El WhatsApp de la venta queda como el del comprador; si faltaba su nombre, se toma
@@ -427,6 +430,7 @@ async function sendClientConfirmation(order: any, opts: { when: string; invoice:
       <strong>Recibe:</strong> ${escapeHtml(order.customerName)} · ${escapeHtml(order.customerPhone)}</p>
       <ul style="padding-left:18px;margin:12px 0;">${items}</ul>
       <p><strong>Total pagado:</strong> ${money(order.totalValue)}</p>
+      <p>Puedes revisar tu pedido cuando quieras en <a href="${clientLinkUrl(link.token)}">este link</a>.</p>
       <p>${opts.invoice ? "Te enviaremos la factura a este correo cuando el SRI la autorice." : "Si necesitas un cambio, escríbele a tu asesor."}</p>`,
   });
 }
@@ -550,7 +554,7 @@ export async function runClientLinkCron() {
             <p>Ya recibimos tu pago de <strong>${money(order.totalValue)}</strong>. Solo falta que nos digas ${
               link.plannedType === "delivery" ? "dónde entregamos tu pedido" : "en qué tienda lo retiras"
             } y la fecha.</p>
-            <p>Entregamos desde el día siguiente, de 11h00 a 19h00. El link vence el ${new Date(link.expiresAt).toLocaleDateString("es-EC", { timeZone: "America/Guayaquil" })}.</p>`,
+            <p>${SCHEDULE_TEXT} El link vence el ${new Date(link.expiresAt).toLocaleDateString("es-EC", { timeZone: "America/Guayaquil" })}.</p>`,
           cta: { label: "Completar mi pedido", url: clientLinkUrl(link.token) },
         });
         if (sent) {
