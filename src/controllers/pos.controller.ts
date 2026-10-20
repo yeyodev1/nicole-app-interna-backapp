@@ -246,6 +246,26 @@ export async function getRestockDailyForm(req: Request, res: Response): Promise<
 }
 
 /**
+ * GET /api/pos/restock/daily-sales?branch=X&date=YYYY-MM-DD
+ * Venta del día de la sucursal según Contífico (porciones vendidas por producto).
+ * Es lento (~10-15s la primera vez por día): el frontend lo pide aparte del formulario.
+ */
+export async function getRestockDailySales(req: Request, res: Response): Promise<void> {
+  try {
+    const { branch, date } = req.query;
+    if (!branch) {
+      res.status(HttpStatusCode.BadRequest).send({ message: "branch query param is required." });
+      return;
+    }
+    const data = await posRestockService.getDailySales(branch as string, date as string | undefined);
+    res.status(HttpStatusCode.Ok).send({ message: "Daily sales retrieved.", data });
+  } catch (error: any) {
+    console.error("Error retrieving daily sales:", error);
+    res.status(HttpStatusCode.InternalServerError).send({ message: "Failed to retrieve daily sales.", error: error.message });
+  }
+}
+
+/**
  * POST /api/pos/restock/daily-entry
  * Body: { branch, date, submittedBy, items: [{ productName, bajas, bajasNote?, stockFinal }] }
  */

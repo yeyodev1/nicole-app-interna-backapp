@@ -1157,4 +1157,22 @@ export class ContificoService {
       return [];
     }
   }
+
+  /**
+   * Puntos de emisión (POS) de la cuenta: GET /pos/.
+   * Cada uno trae `id` (el `pos` que viene en los documentos), `direccion`
+   * (etiqueta de la caja, ej. "C.C. San Marino"), `establecimiento` y
+   * `punto_emision` (los del número de factura EEE-PPP-XXXXXXXXX).
+   */
+  async getPuntosEmision() {
+    try {
+      const response = await axios.get(`${this.baseUrl}/pos/`, {
+        headers: { Authorization: this.apiKey },
+      });
+      return Array.isArray(response.data) ? response.data : [];
+    } catch (error: any) {
+      console.error("❌ Error fetching puntos de emisión from Contífico:", error.response?.data || error.message);
+      return [];
+    }
+  }
 }

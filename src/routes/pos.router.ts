@@ -7,6 +7,7 @@ import {
   getRestockObjectives,
   upsertRestockObjective,
   getRestockDailyForm,
+  getRestockDailySales,
   submitRestockDailyEntry,
   getRestockHistory,
   getRestockLeftovers,
@@ -37,6 +38,7 @@ router.get("/restock/objectives", getRestockObjectives);
 router.post("/restock/objectives", upsertRestockObjective);
 router.delete("/restock/objectives/:productName", deleteRestockObjective);
 router.get("/restock/daily-form", getRestockDailyForm);
+router.get("/restock/daily-sales", getRestockDailySales);
 router.post("/restock/daily-entry", submitRestockDailyEntry);
 router.get("/restock/history", getRestockHistory);
 router.get("/restock/leftovers", getRestockLeftovers);

@@ -2,6 +2,9 @@ import { models } from "../models";
 import { getEcuadorNow } from "../utils/date.utils";
 import { IPOSStockObjective, WeeklyObjectives } from "../models/pos-stock-objective.model";
 import { IPOSDailyEntry } from "../models/pos-daily-entry.model";
+import { ContificoService } from "./contifico.service";
+import { getBranchPuntoCodes } from "../config/contifico-pos.config";
+import { normalizeString } from "../utils/string.utils";
 
 // Day-of-week index (getUTCDay) → objectives key
 const DOW_KEYS: (keyof WeeklyObjectives)[] = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
@@ -26,7 +29,138 @@ function toDateStr(date: Date): string {
   return date.toISOString().split("T")[0];
 }
 
+interface PosSalesAgg {
+  byProductId: Map<string, number>;
+  byProductName: Map<string, number>;
+}
+
 export class POSRestockService {
+  private contifico = new ContificoService("nicole");
+  // Cache corto por fecha, compartido entre sucursales: Contífico tarda ~10-15s
+  // en devolver el día completo y el formulario se recarga varias veces.
+  private docsCache = new Map<string, { at: number; byPos: Map<string, PosSalesAgg> }>();
+  private static readonly SALES_CACHE_TTL = 3 * 60 * 1000;
+
+  /**
+   * Facturas del día en Contífico agregadas por punto de emisión:
+   * pos → cantidades vendidas por producto (id y nombre normalizado).
+   * El filtro `pos` de la API se ignora server-side, así que se baja el día
+   * completo una vez y se cachea para todas las sucursales.
+   */
+  private async getDaySalesByPos(dateStr: string): Promise<Map<string, PosSalesAgg>> {
+    const cached = this.docsCache.get(dateStr);
+    if (cached && Date.now() - cached.at < POSRestockService.SALES_CACHE_TTL) {
+      return cached.byPos;
+    }
+
+    const [y, m, d] = dateStr.split("-");
+    const fecha = `${d}/${m}/${y}`; // DD/MM/YYYY
+
+    const byPos = new Map<string, PosSalesAgg>();
+    const seenIds = new Set<string>();
+    const PAGE_SIZE = 500;
+    const MAX_PAGES = 10;
+
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const res = await this.contifico.getDocuments({
+        fecha_emision: fecha,
+        tipo_registro: "CLI",
+        result_size: PAGE_SIZE,
+        result_page: page,
+      });
+      const docs = Array.isArray(res) ? res : [];
+
+      let nuevos = 0;
+      for (const doc of docs) {
+        const id = String(doc?.id || "");
+        if (id && seenIds.has(id)) continue; // la API repitió resultados
+        if (id) seenIds.add(id);
+        nuevos++;
+
+        if (doc.anulado || doc.tipo_documento !== "FAC" || !doc.pos) continue;
+
+        let agg = byPos.get(doc.pos);
+        if (!agg) {
+          agg = { byProductId: new Map(), byProductName: new Map() };
+          byPos.set(doc.pos, agg);
+        }
+        for (const det of doc.detalles || []) {
+          const qty = parseFloat(det.cantidad || "0");
+          if (!qty) continue;
+          if (det.producto_id) {
+            agg.byProductId.set(det.producto_id, (agg.byProductId.get(det.producto_id) || 0) + qty);
+          }
+          if (det.producto_nombre) {
+            const key = normalizeString(det.producto_nombre);
+            agg.byProductName.set(key, (agg.byProductName.get(key) || 0) + qty);
+          }
+        }
+      }
+
+      if (docs.length < PAGE_SIZE || nuevos === 0) break;
+    }
+
+    this.docsCache.set(dateStr, { at: Date.now(), byPos });
+    return byPos;
+  }
+
+  /**
+   * Venta del día de una sucursal según Contífico, alineada a los productos
+   * configurados en sus objetivos de stock. `available: false` cuando la
+   * sucursal no tiene punto de emisión mapeado o Contífico falla: la pantalla
+   * nunca se bloquea por esto.
+   */
+  async getDailySales(branch: string, dateStr?: string) {
+    const ecNow = getEcuadorNow();
+    const date = dateStr || ecNow.toISOString().split("T")[0];
+
+    try {
+      const puntosEmision = await this.contifico.getPuntosEmision();
+      const codes = getBranchPuntoCodes(branch);
+      const branchNorm = normalizeString(branch);
+
+      const targets = puntosEmision.filter((p: any) => {
+        const code = `${p.establecimiento}-${p.punto_emision}`;
+        if (codes) return codes.includes(code);
+        // Sin mapeo explícito: por nombre/dirección de la caja
+        const label = normalizeString(`${p.nombre || ""} ${p.direccion || ""}`);
+        return branchNorm.length > 3 && label.includes(branchNorm);
+      });
+
+      if (targets.length === 0) {
+        return { branch, date, available: false, puntos: [], products: {} };
+      }
+
+      const byPos = await this.getDaySalesByPos(date);
+      const objectives = await models.posStockObjectives.find({ branch: branchMatch(branch) }).lean();
+
+      const products: Record<string, number> = {};
+      for (const obj of objectives as any[]) {
+        if (obj.isGeneral) continue; // suministros manuales: no se venden en caja
+        let total = 0;
+        for (const target of targets) {
+          const agg = byPos.get(target.id);
+          if (!agg) continue;
+          const byId = obj.contificoId ? agg.byProductId.get(obj.contificoId) : undefined;
+          const byName = agg.byProductName.get(normalizeString(obj.productName));
+          total += byId ?? byName ?? 0;
+        }
+        products[obj.productName] = total;
+      }
+
+      return {
+        branch,
+        date,
+        available: true,
+        puntos: targets.map((p: any) => `${p.establecimiento}-${p.punto_emision} ${p.direccion || p.nombre || ""}`.trim()),
+        products,
+      };
+    } catch (err: any) {
+      console.warn(`⚠️ [POS] No se pudo leer la venta de ${branch} (${date}) en Contífico: ${err?.message || err}`);
+      return { branch, date, available: false, puntos: [], products: {} };
+    }
+  }
+
   /**
    * Get all stock objectives for a branch.
    */
