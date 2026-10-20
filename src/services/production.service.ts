@@ -451,14 +451,20 @@ export class ProductionService {
    * Register progress for a specific product type (e.g. "Made 10 Lemon Tarts").
    * Automatically distributes the produced amount to the oldest pending orders (FIFO).
    */
-  async registerProductionProgress(productName: string, quantityMade: number) {
+  async registerProductionProgress(productName: string, quantityMade: number, orderIds?: string[]) {
     let remainingToDistribute = quantityMade;
 
-    // Find all active orders containing this product, sorted by urgency (deliveryDate ASC)
-    const orders = await OrderModel.find({
+    // Find all active orders containing this product, sorted by urgency (deliveryDate ASC).
+    // `orderIds` acota el reparto a los pedidos de la fila seleccionada en el resumen
+    // (destino/ronda): así lo producido se acredita exactamente donde la cocina lo marcó.
+    const query: any = {
       productionStage: { $in: ["PENDING", "IN_PROCESS", "DELAYED"] },
       "products.name": productName,
-    }).sort({ deliveryDate: 1 });
+    };
+    if (orderIds && orderIds.length > 0) {
+      query._id = { $in: orderIds };
+    }
+    const orders = await OrderModel.find(query).sort({ deliveryDate: 1 });
 
     for (const order of orders) {
       if (remainingToDistribute <= 0) break;
@@ -509,11 +515,11 @@ export class ProductionService {
     };
   }
 
-  async batchRegisterProductionProgress(items: { productName: string; quantity: number }[]) {
+  async batchRegisterProductionProgress(items: { productName: string; quantity: number; orderIds?: string[] }[]) {
     const results = [];
     for (const item of items) {
       try {
-        const res = await this.registerProductionProgress(item.productName, item.quantity);
+        const res = await this.registerProductionProgress(item.productName, item.quantity, item.orderIds);
         results.push({ name: item.productName, success: true, data: res });
       } catch (err: any) {
         results.push({ name: item.productName, success: false, error: err.message });
