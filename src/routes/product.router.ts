@@ -9,4 +9,7 @@ router.get("/", authMiddleware, ProductController.getProducts);
 
 router.get("/categories", authMiddleware, ProductController.getCategories);
 
+// Mapa producto → categoría tal cual Contífico (para Excel y resumen de producción)
+router.get("/category-map", authMiddleware, ProductController.getContificoCategoryMap);
+
 export default router;

@@ -85,6 +85,48 @@ export async function getProducts(req: AuthRequest, res: Response, next: NextFun
 }
 
 
+/**
+ * GET /api/products/category-map
+ * Mapa nombre de producto (normalizado, sin tildes/minúsculas) → nombre de su
+ * categoría TAL CUAL Contífico. Une Nicole y Sucree (Nicole manda en empates).
+ * Lo usan los Excel de producción/entrega y el resumen para agrupar igual que Contífico.
+ */
+export async function getContificoCategoryMap(req: AuthRequest, res: Response) {
+  const normalize = (s: string) =>
+    s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
+
+  const buildMap = async (svc: ContificoService): Promise<Record<string, string>> => {
+    const map: Record<string, string> = {};
+    try {
+      const [products, categories] = await Promise.all([
+        svc.getCachedProducts(),
+        svc.getCachedCategories(),
+      ]);
+      const catName = new Map<string, string>((categories || []).map((c: any) => [c.id, c.nombre]));
+      for (const p of products || []) {
+        const raw = p.categoria_id ? catName.get(p.categoria_id) : undefined;
+        if (!raw || !p.nombre) continue;
+        // "Cakes Porcion." y "CAKES PORCION" son la misma cosa en su Contífico
+        map[normalize(p.nombre)] = String(raw).trim().replace(/\.+$/, "");
+      }
+    } catch (err: any) {
+      console.warn(`⚠️ [${svc.source}] category-map: ${err?.message || err}`);
+    }
+    return map;
+  };
+
+  try {
+    const [nicoleMap, sucreeMap] = await Promise.all([
+      buildMap(nicoleService),
+      buildMap(sucreeService),
+    ]);
+    res.status(200).send({ byName: { ...sucreeMap, ...nicoleMap } });
+  } catch (error: any) {
+    console.error("❌ Error in getContificoCategoryMap:", error);
+    res.status(500).send({ message: "Failed to build category map", error: error?.message });
+  }
+}
+
 export async function getCategories(req: AuthRequest, res: Response, next: NextFunction) {
   try {
     // Para categorías, usar Nicole por defecto (usada en catálogos internos)
