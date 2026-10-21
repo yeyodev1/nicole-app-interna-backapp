@@ -2,10 +2,12 @@ import type { Request, Response } from "express";
 import { HttpStatusCode } from "axios";
 import { POSService } from "../services/pos.service";
 import { POSRestockService } from "../services/pos-restock.service";
+import { OperationsReportService } from "../services/operations-report.service";
 import { getECDateRange, getEcuadorNow } from "../utils/date.utils";
 
 const posService = new POSService();
 const posRestockService = new POSRestockService();
+const operationsReportService = new OperationsReportService();
 
 /**
  * GET /api/pos/dispatches
@@ -266,6 +268,26 @@ export async function getRestockDailySales(req: Request, res: Response): Promise
 }
 
 /**
+ * GET /api/pos/restock/operations-report?date=YYYY-MM-DD
+ * Reporte del Jefe de Operaciones: Contífico vs datos internos por sucursal
+ * (vendido, venta según cierre, bajas con motivos y descuadres).
+ */
+export async function getOperationsReport(req: Request, res: Response): Promise<void> {
+  try {
+    const date = (req.query.date as string) || new Date(Date.now() - 5 * 3600000).toISOString().split("T")[0];
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      res.status(HttpStatusCode.BadRequest).send({ message: "date debe ser YYYY-MM-DD" });
+      return;
+    }
+    const data = await operationsReportService.getReport(date);
+    res.status(HttpStatusCode.Ok).send({ message: "Operations report retrieved.", data });
+  } catch (error: any) {
+    console.error("Error retrieving operations report:", error);
+    res.status(HttpStatusCode.InternalServerError).send({ message: "Failed to retrieve operations report.", error: error.message });
+  }
+}
+
+/**
  * POST /api/pos/restock/daily-entry
  * Body: { branch, date, submittedBy, items: [{ productName, bajas, bajasNote?, stockFinal }] }
  */
@@ -278,6 +300,12 @@ export async function submitRestockDailyEntry(req: Request, res: Response): Prom
     }
     const requestedByUserId = (req as any).user?.id || (req as any).user?._id;
     const data = await posRestockService.submitDailyEntry(branch, date, items, submittedBy, requestedByUserId);
+
+    // Alerta a los Jefes de Operaciones (correo vía Resend). Se espera aquí
+    // porque en serverless el proceso muere al responder, pero nunca bloquea:
+    // cualquier error solo se loguea dentro del servicio.
+    await operationsReportService.sendClosingAlert(branch, date, submittedBy);
+
     res.status(HttpStatusCode.Ok).send({ message: "Daily entry submitted.", data });
   } catch (error: any) {
     console.error("Error submitting daily entry:", error);
