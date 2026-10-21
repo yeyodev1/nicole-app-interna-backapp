@@ -5,6 +5,7 @@ import { IPOSDailyEntry } from "../models/pos-daily-entry.model";
 import { ContificoService } from "./contifico.service";
 import { getBranchPuntoCodes } from "../config/contifico-pos.config";
 import { normalizeString } from "../utils/string.utils";
+import { buildContificoCategoryMaps } from "../utils/contifico-categorias.util";
 
 // Day-of-week index (getUTCDay) → objectives key
 const DOW_KEYS: (keyof WeeklyObjectives)[] = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
@@ -162,34 +163,11 @@ export class POSRestockService {
   }
 
   /**
-   * Categoría de cada producto, tal cual Contífico: por id y por nombre
-   * normalizado (los ids guardados en objetivos viejos pueden no existir ya
-   * en Contífico, pero el nombre sí calza). Usa el caché de ContificoService
-   * (TTL 1h); si falla devuelve mapas vacíos y el cierre agrupa en "Otros".
+   * Categoría de cada producto tal cual Contífico (solo subcategorías de
+   * "Producto Venta", la fuente de verdad). Ver contifico-categorias.util.
    */
-  private async getContificoCategoryMaps(): Promise<{ byId: Map<string, string>; byName: Map<string, string> }> {
-    const byId = new Map<string, string>();
-    const byName = new Map<string, string>();
-    try {
-      const [products, categories] = await Promise.all([
-        this.contifico.getCachedProducts(),
-        this.contifico.getCachedCategories(),
-      ]);
-      const catName = new Map<string, string>(
-        (categories || []).map((c: any) => [c.id, c.nombre])
-      );
-      for (const p of products || []) {
-        const raw = p.categoria_id ? catName.get(p.categoria_id) : undefined;
-        if (!raw) continue;
-        // "Cakes Porcion." y "CAKES PORCION" son la misma cosa en su Contífico
-        const nombre = String(raw).trim().replace(/\.+$/, "");
-        if (p.id) byId.set(p.id, nombre);
-        if (p.nombre) byName.set(normalizeString(p.nombre), nombre);
-      }
-    } catch (err: any) {
-      console.warn(`⚠️ [POS] No se pudieron leer las categorías de Contífico: ${err?.message || err}`);
-    }
-    return { byId, byName };
+  private getContificoCategoryMaps() {
+    return buildContificoCategoryMaps(this.contifico);
   }
 
   /**
