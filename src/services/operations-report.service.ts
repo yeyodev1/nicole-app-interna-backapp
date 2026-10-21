@@ -1,12 +1,15 @@
 import { Resend } from "resend";
 import { models } from "../models";
 import { POSRestockService } from "./pos-restock.service";
+import { ContificoService } from "./contifico.service";
 import { normalizeString } from "../utils/string.utils";
+import { buildContificoCategoryMaps, CategoryMaps } from "../utils/contifico-categorias.util";
 
 const FROM_ADDRESS = process.env.EMAIL_FROM || "Nicole Pastry Arts <app@nicole.com.ec>";
 
 export interface OperationsProductRow {
   name: string;
+  categoria: string | null; // tal cual Contífico (subcategorías de "Producto Venta")
   vendido: number | null; // Contífico
   ventaCierre: number | null; // implícita del cierre (null si falta cierre previo)
   bajas: number;
@@ -34,6 +37,7 @@ export interface OperationsBranchReport {
 export class OperationsReportService {
   private posRestock = new POSRestockService();
   private resend = new Resend(process.env.RESEND_API_KEY);
+  private contifico = new ContificoService("nicole");
 
   async getReport(dateStr: string) {
     const activeBranches = (await models.branches
@@ -41,14 +45,15 @@ export class OperationsReportService {
       .sort({ sortOrder: 1 })
       .lean()) as any[];
 
-    const leftovers = await this.posRestock.getLeftovers({ from: dateStr, to: dateStr });
-    const lossesDocs = (await models.posLosses
-      .find({ date: new Date(`${dateStr}T00:00:00.000Z`) })
-      .lean()) as any[];
+    const [leftovers, lossesDocs, categoryMaps] = await Promise.all([
+      this.posRestock.getLeftovers({ from: dateStr, to: dateStr }),
+      models.posLosses.find({ date: new Date(`${dateStr}T00:00:00.000Z`) }).lean() as Promise<any[]>,
+      buildContificoCategoryMaps(this.contifico),
+    ]);
 
     const branches: OperationsBranchReport[] = [];
     for (const b of activeBranches) {
-      const report = await this.buildBranchDay(b.name, dateStr, leftovers, lossesDocs);
+      const report = await this.buildBranchDay(b.name, dateStr, leftovers, lossesDocs, categoryMaps);
       if (report.salesAvailable || report.products.length > 0) branches.push(report);
     }
 
@@ -65,7 +70,8 @@ export class OperationsReportService {
     branch: string,
     dateStr: string,
     leftovers: any,
-    lossesDocs: any[]
+    lossesDocs: any[],
+    categoryMaps: CategoryMaps
   ): Promise<OperationsBranchReport> {
     const sales = await this.posRestock.getDailySales(branch, dateStr);
     const bKey = normalizeString(branch);
@@ -73,14 +79,25 @@ export class OperationsReportService {
     const rows = (leftovers.rows as any[]).filter((r) => normalizeString(r.branch) === bKey);
     const losses = lossesDocs
       .filter((l) => normalizeString(l.branch) === bKey)
-      .map((l) => ({ productName: l.productName, quantity: l.quantity, reason: l.reason, category: l.category }));
+      .map((l) => ({
+        productName: l.productName,
+        quantity: l.quantity,
+        reason: l.reason,
+        category: l.category,
+        categoria: categoryMaps.byName.get(normalizeString(l.productName)) || null,
+      }));
 
     const byName = new Map<string, OperationsProductRow>();
     const getRow = (name: string): OperationsProductRow => {
       const key = normalizeString(name);
       let row = byName.get(key);
       if (!row) {
-        row = { name, vendido: sales.available ? 0 : null, ventaCierre: null, bajas: 0, recibido: 0, stockFinal: null, pedidoFinal: 0, descuadre: null };
+        row = {
+          name,
+          categoria: categoryMaps.byName.get(key) || null,
+          vendido: sales.available ? 0 : null,
+          ventaCierre: null, bajas: 0, recibido: 0, stockFinal: null, pedidoFinal: 0, descuadre: null,
+        };
         byName.set(key, row);
       }
       return row;
@@ -140,11 +157,12 @@ export class OperationsReportService {
       const to = Array.from(new Set(recipients.map((u) => String(u.email || "").toLowerCase()).filter(Boolean)));
       if (to.length === 0) return;
 
-      const leftovers = await this.posRestock.getLeftovers({ from: dateStr, to: dateStr, branch });
-      const lossesDocs = (await models.posLosses
-        .find({ branch, date: new Date(`${dateStr}T00:00:00.000Z`) })
-        .lean()) as any[];
-      const report = await this.buildBranchDay(branch, dateStr, leftovers, lossesDocs);
+      const [leftovers, lossesDocs, categoryMaps] = await Promise.all([
+        this.posRestock.getLeftovers({ from: dateStr, to: dateStr, branch }),
+        models.posLosses.find({ branch, date: new Date(`${dateStr}T00:00:00.000Z`) }).lean() as Promise<any[]>,
+        buildContificoCategoryMaps(this.contifico),
+      ]);
+      const report = await this.buildBranchDay(branch, dateStr, leftovers, lossesDocs, categoryMaps);
 
       const descuadres = report.products.filter((p) => (p.descuadre ?? 0) !== 0);
       const fecha = dateStr.split("-").reverse().join("/");
