@@ -275,11 +275,12 @@ export async function getRestockDailySales(req: Request, res: Response): Promise
 export async function getOperationsReport(req: Request, res: Response): Promise<void> {
   try {
     const date = (req.query.date as string) || new Date(Date.now() - 5 * 3600000).toISOString().split("T")[0];
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      res.status(HttpStatusCode.BadRequest).send({ message: "date debe ser YYYY-MM-DD" });
+    const to = req.query.to as string | undefined;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || (to && !/^\d{4}-\d{2}-\d{2}$/.test(to))) {
+      res.status(HttpStatusCode.BadRequest).send({ message: "date/to deben ser YYYY-MM-DD" });
       return;
     }
-    const data = await operationsReportService.getReport(date);
+    const data = await operationsReportService.getReport(date, to);
     res.status(HttpStatusCode.Ok).send({ message: "Operations report retrieved.", data });
   } catch (error: any) {
     console.error("Error retrieving operations report:", error);

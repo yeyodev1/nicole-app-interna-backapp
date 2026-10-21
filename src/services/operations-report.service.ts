@@ -47,27 +47,65 @@ export class OperationsReportService {
   private resend = new Resend(process.env.RESEND_API_KEY);
   private contifico = new ContificoService("nicole");
 
-  async getReport(dateStr: string) {
+  /** Lista de días YYYY-MM-DD entre from y to (inclusive). */
+  private daysBetween(from: string, to: string): string[] {
+    const days: string[] = [];
+    const cursor = new Date(`${from}T00:00:00.000Z`);
+    const end = new Date(`${to}T00:00:00.000Z`);
+    while (cursor <= end) {
+      days.push(cursor.toISOString().split("T")[0]);
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
+    }
+    return days;
+  }
+
+  /**
+   * Reporte de un día o de un rango desde–hasta (máx. 31 días).
+   * En rango: inicial = primer día, quedó = último día, y recibido/vendido/
+   * bajas se acumulan. Cada día de Contífico usa la caché en Mongo.
+   */
+  async getReport(fromStr: string, toStr?: string) {
+    const from = fromStr;
+    const to = toStr && toStr >= fromStr ? toStr : fromStr;
+    const days = this.daysBetween(from, to).slice(0, 31);
+    const realTo = days[days.length - 1];
+
     const activeBranches = (await models.branches
       .find({ isActive: true })
       .sort({ sortOrder: 1 })
       .lean()) as any[];
 
-    const [leftovers, lossesDocs, categoryMaps, dispatchMap] = await Promise.all([
-      this.posRestock.getLeftovers({ from: dateStr, to: dateStr }),
-      models.posLosses.find({ date: new Date(`${dateStr}T00:00:00.000Z`) }).lean() as Promise<any[]>,
+    const dayStart = new Date(`${from}T00:00:00.000Z`);
+    const dayEnd = new Date(`${realTo}T23:59:59.999Z`);
+
+    const [leftovers, lossesDocs, categoryMaps, ...dispatchMaps] = await Promise.all([
+      this.posRestock.getLeftovers({ from, to: realTo }),
+      models.posLosses.find({ date: { $gte: dayStart, $lte: dayEnd } }).lean() as Promise<any[]>,
       buildContificoCategoryMaps(this.contifico),
-      this.getDispatchByDay(dateStr),
+      ...days.map((d) => this.getDispatchByDay(d)),
     ]);
+
+    // Unir los despachos de todos los días del rango
+    const dispatchMap = new Map<string, { ok: number; sinOk: number }>();
+    for (const dm of dispatchMaps as Map<string, { ok: number; sinOk: number }>[]) {
+      for (const [key, v] of dm) {
+        const entry = dispatchMap.get(key) || { ok: 0, sinOk: 0 };
+        entry.ok += v.ok;
+        entry.sinOk += v.sinOk;
+        dispatchMap.set(key, entry);
+      }
+    }
 
     const branches: OperationsBranchReport[] = [];
     for (const b of activeBranches) {
-      const report = await this.buildBranchDay(b.name, dateStr, leftovers, lossesDocs, categoryMaps, dispatchMap);
+      const report = await this.buildBranchRange(b.name, days, leftovers, lossesDocs, categoryMaps, dispatchMap);
       if (report.salesAvailable || report.products.length > 0) branches.push(report);
     }
 
     return {
-      date: dateStr,
+      date: from,
+      from,
+      to: realTo,
       branches,
       missingClosings: leftovers.missing.filter((m: any) =>
         branches.some(b => normalizeString(b.branch) === normalizeString(m.branch))
@@ -132,15 +170,28 @@ export class OperationsReportService {
     return map;
   }
 
-  private async buildBranchDay(
+  private async buildBranchRange(
     branch: string,
-    dateStr: string,
+    days: string[],
     leftovers: any,
     lossesDocs: any[],
     categoryMaps: CategoryMaps,
     dispatchMap: Map<string, { ok: number; sinOk: number }>
   ): Promise<OperationsBranchReport> {
-    const sales = await this.posRestock.getDailySales(branch, dateStr);
+    // Venta de Contífico acumulada en el rango (cada día sale de la caché Mongo)
+    let salesAvailable = false;
+    const salesTotals: Record<string, number> = {};
+    for (const day of days) {
+      const daySales = await this.posRestock.getDailySales(branch, day);
+      if (!daySales.available) continue;
+      salesAvailable = true;
+      for (const [name, qty] of Object.entries(daySales.products)) {
+        salesTotals[name] = (salesTotals[name] || 0) + (qty as number);
+      }
+    }
+    const sales = { available: salesAvailable, products: salesTotals };
+    const firstDay = days[0];
+    const lastDay = days[days.length - 1];
     const bKey = normalizeString(branch);
 
     // Suministros manuales (isGeneral): llegan por despacho pero no se venden
@@ -197,11 +248,16 @@ export class OperationsReportService {
     }
     for (const r of rows) {
       const row = getRow(r.productName);
-      row.inicial = r.stockInicial ?? null;
-      row.bajas = r.bajas || 0;
-      row.quedo = r.stockFinal ?? null;
-      row.ventaCierre = r.ventaImplicita;
-      row.pedidoFinal = r.pedidoFinal || 0;
+      // Rango: inicial del primer día, quedó del último, bajas acumuladas
+      if (r.date === firstDay) row.inicial = r.stockInicial ?? null;
+      if (r.date === lastDay) {
+        row.quedo = r.stockFinal ?? null;
+        row.pedidoFinal = r.pedidoFinal || 0;
+      }
+      row.bajas += r.bajas || 0;
+      if (r.ventaImplicita !== null && r.ventaImplicita !== undefined) {
+        row.ventaCierre = (row.ventaCierre || 0) + r.ventaImplicita;
+      }
     }
     for (const [key, row] of byName) {
       // Los suministros no se venden en caja: sin cuenta de diferencia
@@ -262,7 +318,7 @@ export class OperationsReportService {
         buildContificoCategoryMaps(this.contifico),
         this.getDispatchByDay(dateStr),
       ]);
-      const report = await this.buildBranchDay(branch, dateStr, leftovers, lossesDocs, categoryMaps, dispatchMap);
+      const report = await this.buildBranchRange(branch, [dateStr], leftovers, lossesDocs, categoryMaps, dispatchMap);
 
       const descuadres = report.products.filter((p) => (p.descuadre ?? 0) !== 0);
       const fecha = dateStr.split("-").reverse().join("/");
