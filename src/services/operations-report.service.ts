@@ -10,13 +10,17 @@ const FROM_ADDRESS = process.env.EMAIL_FROM || "Nicole Pastry Arts <app@nicole.c
 export interface OperationsProductRow {
   name: string;
   categoria: string | null; // tal cual Contífico (subcategorías de "Producto Venta")
-  vendido: number | null; // Contífico
-  ventaCierre: number | null; // implícita del cierre (null si falta cierre previo)
+  inicial: number | null; // con cuánto empezó el día (cierre anterior)
+  recibido: number; // cuánto le llegó según el despacho
+  vendido: number | null; // vendido según Contífico
   bajas: number;
-  recibido: number;
-  stockFinal: number | null;
+  deberiaQuedar: number | null; // inicial + recibido - vendido - bajas
+  quedo: number | null; // lo que contó el cierre (stockFinal)
+  // quedo - deberiaQuedar: negativo = FALTA producto (perdido o vendido sin
+  // factura); positivo = SOBRA (recepción sin registrar o error de conteo)
+  descuadre: number | null;
+  ventaCierre: number | null; // venta implícita del cierre (dato de apoyo)
   pedidoFinal: number;
-  descuadre: number | null; // ventaCierre - vendido (positivo = salió más de lo facturado)
 }
 
 export interface OperationsBranchReport {
@@ -95,8 +99,15 @@ export class OperationsReportService {
         row = {
           name,
           categoria: categoryMaps.byName.get(key) || null,
+          inicial: null,
+          recibido: 0,
           vendido: sales.available ? 0 : null,
-          ventaCierre: null, bajas: 0, recibido: 0, stockFinal: null, pedidoFinal: 0, descuadre: null,
+          bajas: 0,
+          deberiaQuedar: null,
+          quedo: null,
+          descuadre: null,
+          ventaCierre: null,
+          pedidoFinal: 0,
         };
         byName.set(key, row);
       }
@@ -110,15 +121,21 @@ export class OperationsReportService {
     }
     for (const r of rows) {
       const row = getRow(r.productName);
-      row.ventaCierre = r.ventaImplicita;
-      row.bajas = r.bajas || 0;
+      row.inicial = r.stockInicial ?? null;
       row.recibido = r.recibido || 0;
-      row.stockFinal = r.stockFinal ?? null;
+      row.bajas = r.bajas || 0;
+      row.quedo = r.stockFinal ?? null;
+      row.ventaCierre = r.ventaImplicita;
       row.pedidoFinal = r.pedidoFinal || 0;
     }
     for (const row of byName.values()) {
-      if (row.vendido !== null && row.ventaCierre !== null) {
-        row.descuadre = row.ventaCierre - row.vendido;
+      // Flujo del día: empezó + llegó - vendido - bajas = debería quedar.
+      // Descuadre = lo que contó el cierre - lo que debería quedar.
+      if (row.inicial !== null && row.vendido !== null) {
+        row.deberiaQuedar = row.inicial + row.recibido - row.vendido - row.bajas;
+        if (row.quedo !== null) {
+          row.descuadre = row.quedo - row.deberiaQuedar;
+        }
       }
     }
 
@@ -170,13 +187,17 @@ export class OperationsReportService {
         ? `⚠️ Cierre ${branch} ${fecha}: ${descuadres.length} producto(s) no cuadran`
         : `✅ Cierre ${branch} ${fecha}: todo cuadra`;
 
+      const td = `padding:6px 8px;border-bottom:1px solid #f1f5f9;`;
       const fila = (p: OperationsProductRow) => `
         <tr>
-          <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;">${p.name}</td>
-          <td align="center" style="padding:6px 10px;border-bottom:1px solid #f1f5f9;">${p.vendido ?? "—"}</td>
-          <td align="center" style="padding:6px 10px;border-bottom:1px solid #f1f5f9;">${p.ventaCierre ?? "—"}</td>
-          <td align="center" style="padding:6px 10px;border-bottom:1px solid #f1f5f9;">${p.bajas || ""}</td>
-          <td align="center" style="padding:6px 10px;border-bottom:1px solid #f1f5f9;font-weight:bold;color:${(p.descuadre ?? 0) !== 0 ? "#dc2626" : "#16a34a"};">${p.descuadre ?? "—"}</td>
+          <td style="${td}">${p.name}${p.categoria ? ` <span style="font-size:10px;color:#7c3aed;">(${p.categoria})</span>` : ""}</td>
+          <td align="center" style="${td}">${p.inicial ?? "—"}</td>
+          <td align="center" style="${td}">${p.recibido || ""}</td>
+          <td align="center" style="${td}">${p.vendido ?? "—"}</td>
+          <td align="center" style="${td}">${p.bajas || ""}</td>
+          <td align="center" style="${td}">${p.deberiaQuedar ?? "—"}</td>
+          <td align="center" style="${td}">${p.quedo ?? "—"}</td>
+          <td align="center" style="${td}font-weight:bold;color:${(p.descuadre ?? 0) !== 0 ? "#dc2626" : "#16a34a"};">${p.descuadre === null ? "—" : (p.descuadre > 0 ? `+${p.descuadre}` : p.descuadre)}</td>
         </tr>`;
 
       const bajasHtml = report.losses.length
@@ -192,17 +213,21 @@ export class OperationsReportService {
   <p style="margin:0 0 16px;color:#6b7280;font-size:13px;">Enviado por <strong>${submittedBy}</strong> · Alertas de Operaciones · Nicole Pastry Arts</p>
   <table width="100%" cellpadding="0" cellspacing="0" style="font-size:13px;border-collapse:collapse;">
     <tr style="background:#f8fafc;color:#475569;">
-      <th align="left" style="padding:8px 10px;">Producto</th>
-      <th style="padding:8px 10px;">Vendido (Contífico)</th>
-      <th style="padding:8px 10px;">Venta según cierre</th>
-      <th style="padding:8px 10px;">Bajas</th>
-      <th style="padding:8px 10px;">Descuadre</th>
+      <th align="left" style="padding:8px 8px;">Producto</th>
+      <th style="padding:8px 8px;">Empezó</th>
+      <th style="padding:8px 8px;">Llegó</th>
+      <th style="padding:8px 8px;">Vendido</th>
+      <th style="padding:8px 8px;">Bajas</th>
+      <th style="padding:8px 8px;">Debería quedar</th>
+      <th style="padding:8px 8px;">Quedó</th>
+      <th style="padding:8px 8px;">Descuadre</th>
     </tr>
     ${(descuadres.length > 0 ? descuadres : report.products.slice(0, 15)).map(fila).join("")}
   </table>
   <p style="margin:14px 0 0;color:#374151;font-size:13px;">
-    Totales: vendido <strong>${report.totals.vendido}</strong> · cierre <strong>${report.totals.ventaCierre}</strong> ·
-    bajas <strong>${report.totals.bajas}</strong> · descuadre <strong style="color:${report.totals.descuadre !== 0 ? "#dc2626" : "#16a34a"};">${report.totals.descuadre}</strong>
+    Totales: vendido <strong>${report.totals.vendido}</strong> · bajas <strong>${report.totals.bajas}</strong> ·
+    descuadre <strong style="color:${report.totals.descuadre !== 0 ? "#dc2626" : "#16a34a"};">${report.totals.descuadre > 0 ? `+${report.totals.descuadre}` : report.totals.descuadre}</strong>
+    <span style="color:#9ca3af;">(negativo = falta producto; positivo = sobra)</span>
   </p>
   ${bajasHtml}
   <p style="margin:18px 0 0;font-size:12px;color:#9ca3af;">Detalle completo en app.nicole.com.ec → Reporte de Operaciones.</p>
