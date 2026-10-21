@@ -73,7 +73,10 @@ export class ProductionService {
     // This solves the "disappearing orders" issue where items are 1/1 done but stage is stuck.
     for (const order of orders) {
       if (order.productionStage !== "FINISHED" && order.productionStage !== "VOID") {
-        const allDone = order.products.every(p => (p.produced || 0) >= p.quantity);
+        // Done = producido completo o cerrado (resto eliminado del pendiente)
+        const allDone = order.products.every(
+          p => (p.produced || 0) >= p.quantity || p.productionStatus === "COMPLETED"
+        );
         if (allDone && order.products.length > 0) {
           order.productionStage = "FINISHED";
           await order.save();
@@ -451,8 +454,14 @@ export class ProductionService {
    * Register progress for a specific product type (e.g. "Made 10 Lemon Tarts").
    * Automatically distributes the produced amount to the oldest pending orders (FIFO).
    */
-  async registerProductionProgress(productName: string, quantityMade: number, orderIds?: string[]) {
+  async registerProductionProgress(
+    productName: string,
+    quantityMade: number,
+    orderIds?: string[],
+    discardRemainder?: boolean
+  ) {
     let remainingToDistribute = quantityMade;
+    let discarded = 0;
 
     // Find all active orders containing this product, sorted by urgency (deliveryDate ASC).
     // `orderIds` acota el reparto a los pedidos de la fila seleccionada en el resumen
@@ -466,33 +475,43 @@ export class ProductionService {
     }
     const orders = await OrderModel.find(query).sort({ deliveryDate: 1 });
 
+    // "Eliminar el resto": si la cocina marca menos de lo pedido, lo que no se
+    // hizo se saca del pendiente (productionStatus = COMPLETED con produced
+    // menor a quantity) en vez de quedar colgado. Solo con orderIds para no
+    // barrer pedidos fuera de la fila seleccionada.
+    const applyDiscard = !!discardRemainder && !!orderIds && orderIds.length > 0;
+
     for (const order of orders) {
-      if (remainingToDistribute <= 0) break;
+      if (remainingToDistribute <= 0 && !applyDiscard) break;
 
       let orderUpdated = false;
 
       // Iterate through products in the order to find the match
       for (const product of order.products) {
-        if (product.name === productName) {
-          const currentProduced = product.produced || 0;
-          const needed = product.quantity - currentProduced;
+        if (product.name !== productName) continue;
 
-          if (needed > 0) {
-            const take = Math.min(needed, remainingToDistribute);
-            product.produced = currentProduced + take;
-            remainingToDistribute -= take;
-            orderUpdated = true;
+        const currentProduced = product.produced || 0;
+        const needed = product.quantity - currentProduced;
 
-            // If we distributed data, check if we exhausted our supply
-            if (remainingToDistribute <= 0) break;
-          }
+        if (needed > 0 && remainingToDistribute > 0) {
+          const take = Math.min(needed, remainingToDistribute);
+          product.produced = currentProduced + take;
+          remainingToDistribute -= take;
+          orderUpdated = true;
+        }
+
+        // Lo que quedó sin producir en esta fila se elimina del pendiente
+        if (applyDiscard && (product.produced || 0) < product.quantity && product.productionStatus !== "COMPLETED") {
+          discarded += product.quantity - (product.produced || 0);
+          product.productionStatus = "COMPLETED";
+          orderUpdated = true;
         }
       }
 
       if (orderUpdated) {
-        // Check if ALL products in this order are fully produced
+        // Done = producido completo o cerrado (resto eliminado)
         const allDone = order.products.every(
-          (p) => (p.produced || 0) >= p.quantity
+          (p) => (p.produced || 0) >= p.quantity || p.productionStatus === "COMPLETED"
         );
 
         if (allDone) {
@@ -512,14 +531,22 @@ export class ProductionService {
     return {
       distributed: quantityMade - remainingToDistribute,
       remaining: remainingToDistribute, // If > 0, we made more than needed!
+      discarded, // unidades que se eliminaron del pendiente
     };
   }
 
-  async batchRegisterProductionProgress(items: { productName: string; quantity: number; orderIds?: string[] }[]) {
+  async batchRegisterProductionProgress(
+    items: { productName: string; quantity: number; orderIds?: string[]; discardRemainder?: boolean }[]
+  ) {
     const results = [];
     for (const item of items) {
       try {
-        const res = await this.registerProductionProgress(item.productName, item.quantity, item.orderIds);
+        const res = await this.registerProductionProgress(
+          item.productName,
+          item.quantity,
+          item.orderIds,
+          item.discardRemainder
+        );
         results.push({ name: item.productName, success: true, data: res });
       } catch (err: any) {
         results.push({ name: item.productName, success: false, error: err.message });
