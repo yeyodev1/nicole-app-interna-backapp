@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import { models } from "../models";
 import { getEcuadorNow } from "../utils/date.utils";
 import { IPOSStockObjective, WeeklyObjectives } from "../models/pos-stock-objective.model";
@@ -42,16 +43,50 @@ export class POSRestockService {
   private docsCache = new Map<string, { at: number; byPos: Map<string, PosSalesAgg> }>();
   private static readonly SALES_CACHE_TTL = 3 * 60 * 1000;
 
+  // Los puntos de emisión casi nunca cambian: 1h de caché en memoria
+  private puntosCache: { at: number; data: any[] } | null = null;
+
+  private async getPuntosEmisionCached(): Promise<any[]> {
+    if (this.puntosCache && Date.now() - this.puntosCache.at < 3600 * 1000) {
+      return this.puntosCache.data;
+    }
+    const data = await this.contifico.getPuntosEmision();
+    if (Array.isArray(data) && data.length > 0) {
+      this.puntosCache = { at: Date.now(), data };
+    }
+    return data;
+  }
+
   /**
    * Facturas del día en Contífico agregadas por punto de emisión:
    * pos → cantidades vendidas por producto (id y nombre normalizado).
    * El filtro `pos` de la API se ignora server-side, así que se baja el día
-   * completo una vez y se cachea para todas las sucursales.
+   * completo una vez y se cachea.
+   *
+   * Doble caché: memoria (la instancia) y Mongo (compartida entre instancias
+   * serverless). Sin la de Mongo, cada instancia nueva de Vercel pagaba los
+   * ~15s de Contífico y la pantalla se sentía lenta o daba timeout.
    */
   private async getDaySalesByPos(dateStr: string): Promise<Map<string, PosSalesAgg>> {
     const cached = this.docsCache.get(dateStr);
     if (cached && Date.now() - cached.at < POSRestockService.SALES_CACHE_TTL) {
       return cached.byPos;
+    }
+
+    // Hoy cambia cada rato (5 min); un día pasado casi no cambia (6 h).
+    const ecTodayStr = getEcuadorNow().toISOString().split("T")[0];
+    const mongoTtl = dateStr === ecTodayStr ? 5 * 60 * 1000 : 6 * 3600 * 1000;
+    const cacheCol = mongoose.connection.collection("contifico_sales_cache");
+
+    try {
+      const doc = await cacheCol.findOne({ date: dateStr });
+      if (doc && doc.fetchedAt && Date.now() - new Date(doc.fetchedAt).getTime() < mongoTtl) {
+        const byPos = this.deserializeByPos(doc.byPos);
+        this.docsCache.set(dateStr, { at: Date.now(), byPos });
+        return byPos;
+      }
+    } catch (err: any) {
+      console.warn(`⚠️ [POS] Caché Mongo de ventas ilegible (${dateStr}): ${err?.message || err}`);
     }
 
     const [y, m, d] = dateStr.split("-");
@@ -102,6 +137,39 @@ export class POSRestockService {
     }
 
     this.docsCache.set(dateStr, { at: Date.now(), byPos });
+
+    try {
+      await cacheCol.updateOne(
+        { date: dateStr },
+        { $set: { date: dateStr, fetchedAt: new Date(), byPos: this.serializeByPos(byPos) } },
+        { upsert: true }
+      );
+    } catch (err: any) {
+      console.warn(`⚠️ [POS] No se pudo guardar la caché Mongo de ventas (${dateStr}): ${err?.message || err}`);
+    }
+
+    return byPos;
+  }
+
+  private serializeByPos(byPos: Map<string, PosSalesAgg>): Record<string, { byId: Record<string, number>; byName: Record<string, number> }> {
+    const out: Record<string, { byId: Record<string, number>; byName: Record<string, number> }> = {};
+    for (const [pos, agg] of byPos) {
+      out[pos] = {
+        byId: Object.fromEntries(agg.byProductId),
+        byName: Object.fromEntries(agg.byProductName),
+      };
+    }
+    return out;
+  }
+
+  private deserializeByPos(raw: any): Map<string, PosSalesAgg> {
+    const byPos = new Map<string, PosSalesAgg>();
+    for (const [pos, agg] of Object.entries(raw || {})) {
+      byPos.set(pos, {
+        byProductId: new Map(Object.entries((agg as any).byId || {})),
+        byProductName: new Map(Object.entries((agg as any).byName || {})),
+      });
+    }
     return byPos;
   }
 
@@ -116,7 +184,7 @@ export class POSRestockService {
     const date = dateStr || ecNow.toISOString().split("T")[0];
 
     try {
-      const puntosEmision = await this.contifico.getPuntosEmision();
+      const puntosEmision = await this.getPuntosEmisionCached();
       const codes = getBranchPuntoCodes(branch);
       const branchNorm = normalizeString(branch);
 
