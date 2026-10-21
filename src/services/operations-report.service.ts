@@ -11,7 +11,9 @@ export interface OperationsProductRow {
   name: string;
   categoria: string | null; // tal cual Contífico (subcategorías de "Producto Venta")
   inicial: number | null; // con cuánto empezó el día (cierre anterior)
-  recibido: number; // cuánto le llegó según el despacho
+  recibido: number; // total que le llegó (confirmado + despachado sin OK)
+  recibidoOk: number; // confirmado en Recepción Masiva (el OK)
+  recibidoSinOk: number; // despachado por producción pero SIN el OK de la isla
   vendido: number | null; // vendido según Contífico
   bajas: number;
   deberiaQuedar: number | null; // inicial + recibido - vendido - bajas
@@ -27,6 +29,8 @@ export interface OperationsBranchReport {
   branch: string;
   salesAvailable: boolean;
   hasClosing: boolean;
+  /** Unidades despachadas por producción que la isla NO confirmó (sin OK). */
+  sinOkTotal: number;
   totals: { vendido: number; ventaCierre: number; bajas: number; recibido: number; descuadre: number };
   products: OperationsProductRow[];
   losses: Array<{ productName: string; quantity: number; reason: string; category: string }>;
@@ -49,15 +53,16 @@ export class OperationsReportService {
       .sort({ sortOrder: 1 })
       .lean()) as any[];
 
-    const [leftovers, lossesDocs, categoryMaps] = await Promise.all([
+    const [leftovers, lossesDocs, categoryMaps, dispatchMap] = await Promise.all([
       this.posRestock.getLeftovers({ from: dateStr, to: dateStr }),
       models.posLosses.find({ date: new Date(`${dateStr}T00:00:00.000Z`) }).lean() as Promise<any[]>,
       buildContificoCategoryMaps(this.contifico),
+      this.getDispatchByDay(dateStr),
     ]);
 
     const branches: OperationsBranchReport[] = [];
     for (const b of activeBranches) {
-      const report = await this.buildBranchDay(b.name, dateStr, leftovers, lossesDocs, categoryMaps);
+      const report = await this.buildBranchDay(b.name, dateStr, leftovers, lossesDocs, categoryMaps, dispatchMap);
       if (report.salesAvailable || report.products.length > 0) branches.push(report);
     }
 
@@ -70,15 +75,83 @@ export class OperationsReportService {
     };
   }
 
+  /**
+   * Lo despachado a cada sucursal en el día, enlazado al flujo real:
+   * producción despacha (reportedAt) y la isla da el OK en Recepción Masiva
+   * (receivedAt). Lo confirmado cuenta como OK; lo despachado sin confirmar
+   * cuenta aparte (sinOk) para que igual conste y el jefe lo vea.
+   * Clave: `${sucursal normalizada}|${producto normalizado}`.
+   */
+  private async getDispatchByDay(dateStr: string): Promise<Map<string, { ok: number; sinOk: number }>> {
+    const dayStart = new Date(`${dateStr}T00:00:00.000Z`);
+    // receivedAt/reportedAt son timestamps: bordes EC (UTC-5)
+    const start = new Date(dayStart.getTime());
+    const end = new Date(dayStart.getTime() + 24 * 3600000 + 5 * 3600000);
+    const ecDay = (d: Date) => new Date(d.getTime() - 5 * 3600000).toISOString().split("T")[0];
+
+    const orders = (await models.orders
+      .find(
+        {
+          $or: [
+            { "dispatches.receivedAt": { $gte: start, $lte: end } },
+            { "dispatches.reportedAt": { $gte: start, $lte: end } },
+          ],
+        },
+        { dispatches: 1 }
+      )
+      .lean()) as any[];
+
+    const map = new Map<string, { ok: number; sinOk: number }>();
+    const bump = (branch: string, product: string, field: "ok" | "sinOk", qty: number) => {
+      if (!qty) return;
+      const key = `${normalizeString(branch)}|${normalizeString(product)}`;
+      const entry = map.get(key) || { ok: 0, sinOk: 0 };
+      entry[field] += qty;
+      map.set(key, entry);
+    };
+
+    for (const order of orders) {
+      for (const dispatch of order.dispatches || []) {
+        const dest = String(dispatch.destination || "");
+        if (!dest) continue;
+
+        const confirmed = dispatch.receptionStatus !== "PENDING" && dispatch.receivedAt;
+        if (confirmed) {
+          if (ecDay(new Date(dispatch.receivedAt)) !== dateStr) continue;
+          for (const item of dispatch.items || []) {
+            bump(dest, item.name || "", "ok", item.quantityReceived ?? item.quantitySent ?? 0);
+          }
+        } else {
+          if (!dispatch.reportedAt || ecDay(new Date(dispatch.reportedAt)) !== dateStr) continue;
+          for (const item of dispatch.items || []) {
+            bump(dest, item.name || "", "sinOk", item.quantitySent ?? 0);
+          }
+        }
+      }
+    }
+    return map;
+  }
+
   private async buildBranchDay(
     branch: string,
     dateStr: string,
     leftovers: any,
     lossesDocs: any[],
-    categoryMaps: CategoryMaps
+    categoryMaps: CategoryMaps,
+    dispatchMap: Map<string, { ok: number; sinOk: number }>
   ): Promise<OperationsBranchReport> {
     const sales = await this.posRestock.getDailySales(branch, dateStr);
     const bKey = normalizeString(branch);
+
+    // Suministros manuales (isGeneral): llegan por despacho pero no se venden
+    // en caja — sin esto aparecían como "faltantes" gigantes falsos.
+    const objectives = (await models.posStockObjectives
+      .find({ branch: new RegExp(`^${branch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") })
+      .select("productName isGeneral")
+      .lean()) as any[];
+    const suministros = new Set(
+      objectives.filter((o) => o.isGeneral).map((o) => normalizeString(o.productName))
+    );
 
     const rows = (leftovers.rows as any[]).filter((r) => normalizeString(r.branch) === bKey);
     const losses = lossesDocs
@@ -96,11 +169,14 @@ export class OperationsReportService {
       const key = normalizeString(name);
       let row = byName.get(key);
       if (!row) {
+        const disp = dispatchMap.get(`${bKey}|${key}`) || { ok: 0, sinOk: 0 };
         row = {
           name,
           categoria: categoryMaps.byName.get(key) || null,
           inicial: null,
-          recibido: 0,
+          recibido: disp.ok + disp.sinOk,
+          recibidoOk: disp.ok,
+          recibidoSinOk: disp.sinOk,
           vendido: sales.available ? 0 : null,
           bajas: 0,
           deberiaQuedar: null,
@@ -122,15 +198,20 @@ export class OperationsReportService {
     for (const r of rows) {
       const row = getRow(r.productName);
       row.inicial = r.stockInicial ?? null;
-      row.recibido = r.recibido || 0;
       row.bajas = r.bajas || 0;
       row.quedo = r.stockFinal ?? null;
       row.ventaCierre = r.ventaImplicita;
       row.pedidoFinal = r.pedidoFinal || 0;
     }
-    for (const row of byName.values()) {
-      // Flujo del día: empezó + llegó - vendido - bajas = debería quedar.
-      // Descuadre = lo que contó el cierre - lo que debería quedar.
+    for (const [key, row] of byName) {
+      // Los suministros no se venden en caja: sin cuenta de diferencia
+      if (suministros.has(key)) {
+        row.vendido = null;
+        if (!row.categoria) row.categoria = "Suministro";
+        continue;
+      }
+      // Flujo del día: inicial + recibido - vendido - bajas = debería quedar.
+      // Diferencia = lo que contó el cierre - lo que debería quedar.
       if (row.inicial !== null && row.vendido !== null) {
         row.deberiaQuedar = row.inicial + row.recibido - row.vendido - row.bajas;
         if (row.quedo !== null) {
@@ -157,7 +238,8 @@ export class OperationsReportService {
       { vendido: 0, ventaCierre: 0, bajas: 0, recibido: 0, descuadre: 0 }
     );
 
-    return { branch, salesAvailable: sales.available, hasClosing: rows.length > 0, totals, products, losses };
+    const sinOkTotal = products.reduce((s, p) => s + p.recibidoSinOk, 0);
+    return { branch, salesAvailable: sales.available, hasClosing: rows.length > 0, sinOkTotal, totals, products, losses };
   }
 
   /**
@@ -174,12 +256,13 @@ export class OperationsReportService {
       const to = Array.from(new Set(recipients.map((u) => String(u.email || "").toLowerCase()).filter(Boolean)));
       if (to.length === 0) return;
 
-      const [leftovers, lossesDocs, categoryMaps] = await Promise.all([
+      const [leftovers, lossesDocs, categoryMaps, dispatchMap] = await Promise.all([
         this.posRestock.getLeftovers({ from: dateStr, to: dateStr, branch }),
         models.posLosses.find({ branch, date: new Date(`${dateStr}T00:00:00.000Z`) }).lean() as Promise<any[]>,
         buildContificoCategoryMaps(this.contifico),
+        this.getDispatchByDay(dateStr),
       ]);
-      const report = await this.buildBranchDay(branch, dateStr, leftovers, lossesDocs, categoryMaps);
+      const report = await this.buildBranchDay(branch, dateStr, leftovers, lossesDocs, categoryMaps, dispatchMap);
 
       const descuadres = report.products.filter((p) => (p.descuadre ?? 0) !== 0);
       const fecha = dateStr.split("-").reverse().join("/");
@@ -188,11 +271,18 @@ export class OperationsReportService {
         : `✅ Cierre ${branch} ${fecha}: todo cuadra`;
 
       const td = `padding:6px 8px;border-bottom:1px solid #f1f5f9;`;
+      const recibidoCell = (p: OperationsProductRow) => {
+        if (!p.recibido) return "";
+        const sinOk = p.recibidoSinOk > 0
+          ? ` <span style="color:#d97706;font-size:10px;font-weight:bold;">⚠ ${p.recibidoSinOk} sin OK</span>`
+          : "";
+        return `${p.recibido}${sinOk}`;
+      };
       const fila = (p: OperationsProductRow) => `
         <tr>
           <td style="${td}">${p.name}${p.categoria ? ` <span style="font-size:10px;color:#7c3aed;">(${p.categoria})</span>` : ""}</td>
           <td align="center" style="${td}">${p.inicial ?? "—"}</td>
-          <td align="center" style="${td}">${p.recibido || ""}</td>
+          <td align="center" style="${td}">${recibidoCell(p)}</td>
           <td align="center" style="${td}">${p.vendido ?? "—"}</td>
           <td align="center" style="${td}">${p.bajas || ""}</td>
           <td align="center" style="${td}">${p.deberiaQuedar ?? "—"}</td>
@@ -214,13 +304,13 @@ export class OperationsReportService {
   <table width="100%" cellpadding="0" cellspacing="0" style="font-size:13px;border-collapse:collapse;">
     <tr style="background:#f8fafc;color:#475569;">
       <th align="left" style="padding:8px 8px;">Producto</th>
-      <th style="padding:8px 8px;">Empezó</th>
-      <th style="padding:8px 8px;">Llegó</th>
-      <th style="padding:8px 8px;">Vendido</th>
+      <th style="padding:8px 8px;">Stock inicial</th>
+      <th style="padding:8px 8px;">Recibido</th>
+      <th style="padding:8px 8px;">Vendido (Contífico)</th>
       <th style="padding:8px 8px;">Bajas</th>
       <th style="padding:8px 8px;">Debería quedar</th>
-      <th style="padding:8px 8px;">Quedó</th>
-      <th style="padding:8px 8px;">Descuadre</th>
+      <th style="padding:8px 8px;">Quedó (isla)</th>
+      <th style="padding:8px 8px;">Diferencia</th>
     </tr>
     ${(descuadres.length > 0 ? descuadres : report.products.slice(0, 15)).map(fila).join("")}
   </table>
@@ -230,6 +320,11 @@ export class OperationsReportService {
     <span style="color:#9ca3af;">(negativo = falta producto; positivo = sobra)</span>
   </p>
   ${bajasHtml}
+  ${report.sinOkTotal > 0 ? `
+  <p style="margin:14px 0 0;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:8px 12px;color:#92400e;font-size:12px;">
+    ⚠ <strong>${report.sinOkTotal} unidades</strong> fueron despachadas por producción pero la isla
+    <strong>no dio el OK</strong> en Recepción Masiva. Se cuentan igual, pero pide que confirmen la recepción.
+  </p>` : ""}
   <p style="margin:18px 0 0;font-size:12px;color:#9ca3af;">Detalle completo en app.nicole.com.ec → Reporte de Operaciones.</p>
 </div>`;
 
