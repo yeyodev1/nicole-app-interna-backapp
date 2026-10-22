@@ -585,7 +585,11 @@ export class ProductionService {
 
         for (const product of order.products) {
           const sent = sentMap.get(product._id!.toString()) || 0;
-          const remaining = product.quantity - sent;
+          // El resto eliminado no se despacha: solo se debe lo producido
+          const required = product.productionStatus === "COMPLETED"
+            ? Math.min(product.quantity, product.produced || 0)
+            : product.quantity;
+          const remaining = required - sent;
 
           if (remaining > 0) {
             dispatchItems.push({
@@ -832,7 +836,15 @@ export class ProductionService {
       const sent = sentMap.get(product._id.toString()) || 0;
       if (sent > 0) allZero = false;
 
-      if (sent < product.quantity) {
+      // Resto eliminado del pedido: si el producto quedó cerrado produciendo
+      // menos (productionStatus COMPLETED con produced < quantity), lo que se
+      // debe enviar es lo producido, no la cantidad original. Así un pedido
+      // con resto eliminado y todo lo producido enviado queda SENT, no PARTIAL.
+      const required = product.productionStatus === "COMPLETED"
+        ? Math.min(product.quantity, product.produced || 0)
+        : product.quantity;
+
+      if (sent < required) {
         allMatch = false;
         anyDeficit = true;
       } else if (sent > product.quantity) {
