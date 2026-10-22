@@ -434,6 +434,9 @@ export class POSRestockService {
   ): Promise<IPOSDailyEntry> {
     const date = parseDateStr(dateStr);
 
+    // targetDate solo se usa para el objetivo de stock (día siguiente). El pedido
+    // de reposición nace fechado el MISMO día del cierre: cocina y recepción lo
+    // ven al instante (ciclo completo sin esperar al día siguiente).
     const targetDate = new Date(date);
     targetDate.setUTCDate(targetDate.getUTCDate() + 1);
     const targetDow = targetDate.getUTCDay();
@@ -534,10 +537,10 @@ export class POSRestockService {
         }
       }
 
-      // Delete old restock orders for this branch/date (both categories)
+      // Delete old restock orders for this branch/closing date (both categories)
       await models.orders.deleteMany({
         branch,
-        deliveryDate: targetDate,
+        orderDate: date,
         salesChannel: { $in: ["Restock", "Restock-Bodega"] },
       });
 
@@ -566,7 +569,7 @@ export class POSRestockService {
 
           const restockOrderData = {
             branch,
-            deliveryDate: targetDate,
+            deliveryDate: date,
             orderDate: date,
             customerName: `${customerNamePrefix}: ${branch}`,
             customerPhone: "N/A",
@@ -605,13 +608,13 @@ export class POSRestockService {
         if (catItems.length === 0) {
           await models.orders.deleteOne({
             branch,
-            deliveryDate: targetDate,
+            orderDate: date,
             salesChannel: salesChannelLabel,
           });
         } else {
           const restockOrderData = {
             branch,
-            deliveryDate: targetDate,
+            deliveryDate: date,
             orderDate: date,
             customerName: `${customerNamePrefix}: ${branch}`,
             customerPhone: "N/A",
@@ -635,7 +638,7 @@ export class POSRestockService {
           await models.orders.findOneAndUpdate(
             {
               branch,
-              deliveryDate: targetDate,
+              orderDate: date,
               salesChannel: salesChannelLabel,
             },
             { $set: restockOrderData },
@@ -653,7 +656,7 @@ export class POSRestockService {
       await this.syncBodegaRequisition({
         branch,
         closingDate: date,
-        neededForDate: targetDate,
+        neededForDate: date,
         items: restockItems.filter((i) => i.category === "Bodega"),
         objectiveMap,
         submittedBy,
