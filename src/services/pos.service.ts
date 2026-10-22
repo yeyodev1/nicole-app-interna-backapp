@@ -51,7 +51,8 @@ export class POSService {
       if (order.status === "DELIVERED") {
         posStatus = "DELIVERED"; // Green
       } else if (order.dispatches && order.dispatches.length > 0) {
-        const allReceived = order.dispatches.every((d: any) => d.receptionStatus === "RECEIVED");
+        // PROBLEM = recibido con novedad: ya se receptó en ese punto
+        const allReceived = order.dispatches.every((d: any) => ["RECEIVED", "PROBLEM"].includes(d.receptionStatus));
         if (allReceived) {
           posStatus = "RECEIVED"; // Blue
         } else {
@@ -156,7 +157,7 @@ export class POSService {
       if (order.status === "DELIVERED") {
         posStatus = "DELIVERED";
       } else if (order.dispatches && order.dispatches.length > 0) {
-        const allReceived = order.dispatches.every((d: any) => d.receptionStatus === "RECEIVED");
+        const allReceived = order.dispatches.every((d: any) => ["RECEIVED", "PROBLEM"].includes(d.receptionStatus));
         if (allReceived) {
           posStatus = "RECEIVED";
         } else {

@@ -932,7 +932,8 @@ export class POSRestockService {
     const orders = (await models.orders
       .find(
         {
-          "dispatches.receptionStatus": "RECEIVED",
+          // PROBLEM = recibido con novedad: también cuenta como recibido
+          "dispatches.receptionStatus": { $in: ["RECEIVED", "PROBLEM"] },
           "dispatches.receivedAt": { $gte: start, $lte: end },
         },
         { dispatches: 1 }
@@ -942,7 +943,7 @@ export class POSRestockService {
     const map = new Map<string, number>();
     for (const order of orders) {
       for (const dispatch of order.dispatches || []) {
-        if (dispatch.receptionStatus !== "RECEIVED" || !dispatch.receivedAt) continue;
+        if (!["RECEIVED", "PROBLEM"].includes(dispatch.receptionStatus) || !dispatch.receivedAt) continue;
         const receivedAt = new Date(dispatch.receivedAt);
         if (receivedAt < start || receivedAt > end) continue;
 
