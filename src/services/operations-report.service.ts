@@ -273,10 +273,15 @@ export class OperationsReportService {
       if (row.vendido !== null) {
         row.deberiaQuedar = (row.inicial ?? 0) + row.recibido - row.vendido - row.bajas;
         if (row.quedo !== null) {
-          // Diferencia = lo que debería quedar − lo que quedó en isla.
-          // Positivo = falta producto (quedó menos de lo que debía).
-          // Negativo = sobra (quedó más de lo que debía).
-          row.descuadre = row.deberiaQuedar - row.quedo;
+          // Diferencia = el "debería quedar" ajustado con lo que quedó en isla,
+          // respetando su signo: lo que quedó siempre ACERCA la diferencia a
+          // cero, nunca la agranda.
+          //   debería -17, quedó 2 → -15 (faltan 15, las 2 de isla ya aparecen)
+          //   debería  10, quedó 2 →  +8 (sobran 8 que no se vendieron)
+          // Negativo = falta producto · Positivo = sobra.
+          row.descuadre = row.deberiaQuedar < 0
+            ? row.deberiaQuedar + row.quedo
+            : row.deberiaQuedar - row.quedo;
         }
       }
     }
