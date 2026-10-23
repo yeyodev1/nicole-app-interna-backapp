@@ -273,7 +273,10 @@ export class OperationsReportService {
       if (row.vendido !== null) {
         row.deberiaQuedar = (row.inicial ?? 0) + row.recibido - row.vendido - row.bajas;
         if (row.quedo !== null) {
-          row.descuadre = row.quedo - row.deberiaQuedar;
+          // Diferencia = lo que debería quedar − lo que quedó en isla.
+          // Positivo = falta producto (quedó menos de lo que debía).
+          // Negativo = sobra (quedó más de lo que debía).
+          row.descuadre = row.deberiaQuedar - row.quedo;
         }
       }
     }
