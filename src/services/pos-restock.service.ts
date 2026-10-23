@@ -792,8 +792,10 @@ export class POSRestockService {
    *
    *   stockFinal(d-1) + recibido(d) - bajas(d) - stockFinal(d) = ventaImplicita(d)
    *
-   * Si no existe cierre del día anterior, `stockInicial` queda en null y la venta
-   * implícita no se calcula (no se asume 0).
+   * Si no existe cierre del día anterior no hay stock inicial: entonces lo
+   * recibido del día hace de stock inicial y la venta implícita se calcula
+   * desde ahí (recibido - bajas - stockFinal). `stockInicial` se devuelve en
+   * null para que la pantalla muestre que no hubo cierre previo.
    */
   async getLeftovers(params: { from: string; to: string; branch?: string }) {
     const { from, to, branch } = params;
@@ -889,8 +891,8 @@ export class POSRestockService {
             stockFinal,
             stockObjectiveTomorrow: item.stockObjectiveTomorrow ?? 0,
             pedidoFinal: item.pedidoFinal ?? 0,
-            ventaImplicita:
-              stockInicial === null ? null : stockInicial + recibido - bajas - stockFinal,
+            // Sin cierre previo, el recibido es el punto de partida.
+            ventaImplicita: (stockInicial ?? 0) + recibido - bajas - stockFinal,
             submittedBy: entry.submittedBy,
             submittedAt: entry.submittedAt,
           });

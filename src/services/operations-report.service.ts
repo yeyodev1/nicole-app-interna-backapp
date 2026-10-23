@@ -268,8 +268,10 @@ export class OperationsReportService {
       }
       // Flujo del día: inicial + recibido - vendido - bajas = debería quedar.
       // Diferencia = lo que contó el cierre - lo que debería quedar.
-      if (row.inicial !== null && row.vendido !== null) {
-        row.deberiaQuedar = row.inicial + row.recibido - row.vendido - row.bajas;
+      // Sin cierre del día anterior no hay inicial: lo recibido del día hace
+      // de stock inicial y la cuenta corre igual desde ahí.
+      if (row.vendido !== null) {
+        row.deberiaQuedar = (row.inicial ?? 0) + row.recibido - row.vendido - row.bajas;
         if (row.quedo !== null) {
           row.descuadre = row.quedo - row.deberiaQuedar;
         }
