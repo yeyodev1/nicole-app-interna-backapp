@@ -7,6 +7,7 @@ import { ContificoService } from "./contifico.service";
 import { getBranchPuntoCodes } from "../config/contifico-pos.config";
 import { normalizeString } from "../utils/string.utils";
 import { buildContificoCategoryMaps } from "../utils/contifico-categorias.util";
+import { receptionDayOf, receptionCandidatesQuery } from "../utils/reception-day.util";
 
 // Day-of-week index (getUTCDay) → objectives key
 const DOW_KEYS: (keyof WeeklyObjectives)[] = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
@@ -927,18 +928,17 @@ export class POSRestockService {
    * con checklist) y cae a `quantitySent` cuando no se detalló.
    */
   private async getReceivedByDay(fromDate: Date, toDate: Date): Promise<Map<string, number>> {
-    // receivedAt es un timestamp completo: se amplía el rango a los bordes EC (UTC-5).
-    const start = new Date(fromDate.getTime());
-    const end = new Date(toDate.getTime() + 5 * 3600000);
+    const fromStr = toDateStr(fromDate);
+    const toStr = toDateStr(toDate);
 
     const orders = (await models.orders
       .find(
         {
           // PROBLEM = recibido con novedad: también cuenta como recibido
           "dispatches.receptionStatus": { $in: ["RECEIVED", "PROBLEM"] },
-          "dispatches.receivedAt": { $gte: start, $lte: end },
+          ...receptionCandidatesQuery(fromStr, toStr),
         },
-        { dispatches: 1 }
+        { dispatches: 1, salesChannel: 1, orderDate: 1 }
       )
       .lean()) as any[];
 
@@ -946,11 +946,10 @@ export class POSRestockService {
     for (const order of orders) {
       for (const dispatch of order.dispatches || []) {
         if (!["RECEIVED", "PROBLEM"].includes(dispatch.receptionStatus) || !dispatch.receivedAt) continue;
-        const receivedAt = new Date(dispatch.receivedAt);
-        if (receivedAt < start || receivedAt > end) continue;
 
-        // Día en hora Ecuador (UTC-5)
-        const ecDay = toDateStr(new Date(receivedAt.getTime() - 5 * 3600000));
+        // Reposición: cuenta en el cierre siguiente al que la pidió
+        const ecDay = receptionDayOf(order, dispatch.receivedAt);
+        if (ecDay < fromStr || ecDay > toStr) continue;
         const bk = String(dispatch.destination || "").trim().toLowerCase();
         if (!bk) continue;
 

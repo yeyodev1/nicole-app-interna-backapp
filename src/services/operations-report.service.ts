@@ -4,6 +4,7 @@ import { POSRestockService } from "./pos-restock.service";
 import { ContificoService } from "./contifico.service";
 import { normalizeString } from "../utils/string.utils";
 import { buildContificoCategoryMaps, CategoryMaps } from "../utils/contifico-categorias.util";
+import { receptionDayOf, receptionCandidatesQuery } from "../utils/reception-day.util";
 
 const FROM_ADDRESS = process.env.EMAIL_FROM || "Nicole Pastry Arts <app@nicole.com.ec>";
 
@@ -121,22 +122,9 @@ export class OperationsReportService {
    * Clave: `${sucursal normalizada}|${producto normalizado}`.
    */
   private async getDispatchByDay(dateStr: string): Promise<Map<string, { ok: number; sinOk: number }>> {
-    const dayStart = new Date(`${dateStr}T00:00:00.000Z`);
-    // receivedAt/reportedAt son timestamps: bordes EC (UTC-5)
-    const start = new Date(dayStart.getTime());
-    const end = new Date(dayStart.getTime() + 24 * 3600000 + 5 * 3600000);
-    const ecDay = (d: Date) => new Date(d.getTime() - 5 * 3600000).toISOString().split("T")[0];
-
+    // Reposición: cuenta en el cierre siguiente al que la pidió (receptionDayOf)
     const orders = (await models.orders
-      .find(
-        {
-          $or: [
-            { "dispatches.receivedAt": { $gte: start, $lte: end } },
-            { "dispatches.reportedAt": { $gte: start, $lte: end } },
-          ],
-        },
-        { dispatches: 1 }
-      )
+      .find(receptionCandidatesQuery(dateStr, dateStr), { dispatches: 1, salesChannel: 1, orderDate: 1 })
       .lean()) as any[];
 
     const map = new Map<string, { ok: number; sinOk: number }>();
@@ -155,12 +143,12 @@ export class OperationsReportService {
 
         const confirmed = dispatch.receptionStatus !== "PENDING" && dispatch.receivedAt;
         if (confirmed) {
-          if (ecDay(new Date(dispatch.receivedAt)) !== dateStr) continue;
+          if (receptionDayOf(order, dispatch.receivedAt) !== dateStr) continue;
           for (const item of dispatch.items || []) {
             bump(dest, item.name || "", "ok", item.quantityReceived ?? item.quantitySent ?? 0);
           }
         } else {
-          if (!dispatch.reportedAt || ecDay(new Date(dispatch.reportedAt)) !== dateStr) continue;
+          if (!dispatch.reportedAt || receptionDayOf(order, dispatch.reportedAt) !== dateStr) continue;
           for (const item of dispatch.items || []) {
             bump(dest, item.name || "", "sinOk", item.quantitySent ?? 0);
           }
