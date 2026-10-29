@@ -15,7 +15,9 @@ export interface OperationsProductRow {
   recibido: number; // total que le llegó (confirmado + despachado sin OK)
   recibidoOk: number; // confirmado en Recepción Masiva (el OK)
   recibidoSinOk: number; // despachado por producción pero SIN el OK de la isla
-  vendido: number | null; // vendido según Contífico
+  // Todo lo que salió vendido: isla + combos + Casa Mía + Dela Crem
+  vendido: number | null;
+  ventas: { isla: number; combo: number; casaMia: number; delaCrem: number };
   bajas: number;
   deberiaQuedar: number | null; // inicial + recibido - vendido - bajas
   quedo: number | null; // lo que contó el cierre (stockFinal)
@@ -166,16 +168,20 @@ export class OperationsReportService {
     categoryMaps: CategoryMaps,
     dispatchMap: Map<string, { ok: number; sinOk: number }>
   ): Promise<OperationsBranchReport> {
-    // Venta de Contífico acumulada en el rango (cada día sale de la caché Mongo)
+    // Venta de Contífico acumulada en el rango (cada día sale de la caché Mongo):
+    // la de la isla y la de las otras cajas que venden su producto.
     let salesAvailable = false;
     const salesTotals: Record<string, number> = {};
+    const channelTotals: Record<string, Record<string, number>> = {};
+    const add = (acc: Record<string, number>, products: Record<string, number>) => {
+      for (const [name, qty] of Object.entries(products)) acc[name] = (acc[name] || 0) + qty;
+    };
     for (const day of days) {
       const daySales = await this.posRestock.getDailySales(branch, day);
       if (!daySales.available) continue;
       salesAvailable = true;
-      for (const [name, qty] of Object.entries(daySales.products)) {
-        salesTotals[name] = (salesTotals[name] || 0) + (qty as number);
-      }
+      add(salesTotals, daySales.products);
+      for (const ch of daySales.channels) add((channelTotals[ch.key] ||= {}), ch.products);
     }
     const sales = { available: salesAvailable, products: salesTotals };
     const firstDay = days[0];
@@ -217,6 +223,7 @@ export class OperationsReportService {
           recibidoOk: disp.ok,
           recibidoSinOk: disp.sinOk,
           vendido: sales.available ? 0 : null,
+          ventas: { isla: 0, combo: 0, casaMia: 0, delaCrem: 0 },
           bajas: 0,
           deberiaQuedar: null,
           quedo: null,
@@ -230,8 +237,11 @@ export class OperationsReportService {
     };
 
     if (sales.available) {
-      for (const [name, qty] of Object.entries(sales.products)) {
-        getRow(name).vendido = qty as number;
+      for (const [name, qty] of Object.entries(sales.products)) getRow(name).ventas.isla = qty;
+      for (const [key, products] of Object.entries(channelTotals)) {
+        for (const [name, qty] of Object.entries(products)) {
+          (getRow(name).ventas as Record<string, number>)[key] = qty;
+        }
       }
     }
     for (const r of rows) {
@@ -243,18 +253,25 @@ export class OperationsReportService {
         row.pedidoFinal = r.pedidoFinal || 0;
       }
       row.bajas += r.bajas || 0;
+      row.ventas.combo += r.ventaCombo || 0;
       if (r.ventaImplicita !== null && r.ventaImplicita !== undefined) {
         row.ventaCierre = (row.ventaCierre || 0) + r.ventaImplicita;
       }
     }
     for (const [key, row] of byName) {
+      // Todo lo que diga venta resta del stock, igual que las bajas
+      if (sales.available) {
+        const v = row.ventas;
+        row.vendido = v.isla + v.combo + v.casaMia + v.delaCrem;
+      }
       // Los suministros no se venden en caja: sin cuenta de diferencia
       if (suministros.has(key)) {
         row.vendido = null;
         if (!row.categoria) row.categoria = "Suministro";
         continue;
       }
-      // Flujo del día: inicial + recibido - vendido - bajas = debería quedar.
+      // Flujo del día: inicial + recibido - vendido - bajas = debería quedar
+      // (vendido = isla + combos + Casa Mía + Dela Crem).
       // Diferencia = lo que contó el cierre - lo que debería quedar.
       // Sin cierre del día anterior no hay inicial: lo recibido del día hace
       // de stock inicial y la cuenta corre igual desde ahí.
@@ -360,7 +377,7 @@ export class OperationsReportService {
       <th align="left" style="padding:8px 8px;">Producto</th>
       <th style="padding:8px 8px;">Stock inicial</th>
       <th style="padding:8px 8px;">Recibido</th>
-      <th style="padding:8px 8px;">Vendido (Contífico)</th>
+      <th style="padding:8px 8px;" title="Isla + combos + Casa Mía + Dela Cream">Vendido</th>
       <th style="padding:8px 8px;">Bajas</th>
       <th style="padding:8px 8px;">Debería quedar</th>
       <th style="padding:8px 8px;">Quedó (isla)</th>

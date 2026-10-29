@@ -47,3 +47,26 @@ export function getBranchPuntoCodes(branch: string): string[] | null {
   if (fromEnv && fromEnv.length) return fromEnv;
   return BRANCH_POS_DEFAULTS[key] || null;
 }
+
+/**
+ * Otras cajas que venden producto de la isla de una sucursal y por eso
+ * descuentan de su stock: en Mall del Sol, Casa Mía y Dela Crem toman los
+ * postres de la isla. El cierre las muestra en su propia columna (dato de
+ * Contífico) y el reporte de operaciones las suma a lo vendido.
+ */
+export interface BranchSalesChannel {
+  key: "casaMia" | "delaCrem";
+  label: string;
+  codes: string[]; // puntos de emisión EEE-PPP
+}
+
+const BRANCH_EXTRA_CHANNELS: Record<string, BranchSalesChannel[]> = {
+  "mall del sol": [
+    { key: "casaMia", label: "Venta Casa Mía", codes: ["001-004"] },
+    { key: "delaCrem", label: "Venta Dela Cream", codes: ["001-003"] },
+  ],
+};
+
+export function getBranchExtraChannels(branch: string): BranchSalesChannel[] {
+  return BRANCH_EXTRA_CHANNELS[normalizeString(branch)] || [];
+}

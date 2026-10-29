@@ -10,6 +10,7 @@
     "format": "prettier --write 'src/**/*.{js,jsx,ts,tsx,json,css,scss,md}'",
     "seed:users": "ts-node-dev scripts/seed-users.ts",
     "clean:replenishment": "ts-node-dev --transpile-only scripts/clean-replenishment.ts",
+    "sync:objectives": "ts-node-dev --transpile-only scripts/sync-branch-objectives.ts",
     "seed:raw-materials": "ts-node-dev scripts/seed-raw-materials.ts",
     "seed:invoice-sequence": "ts-node-dev scripts/seed-invoice-sequence.ts",
     "seed:sellers": "ts-node-dev scripts/seed-sellers.ts"

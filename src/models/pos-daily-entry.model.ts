@@ -5,6 +5,7 @@ export interface IPOSDailyEntryItem {
   unit: string;
   bajas: number;
   bajasNote?: string;
+  ventaCombo?: number; // vendido en combos (lo escribe la isla: Contífico no lo desglosa)
   stockFinal: number;
   stockObjectiveTomorrow: number;
   pedidoSugerido: number;
@@ -30,6 +31,7 @@ const POSDailyEntryItemSchema = new Schema<IPOSDailyEntryItem>(
     unit: { type: String, required: true },
     bajas: { type: Number, default: 0 },
     bajasNote: { type: String },
+    ventaCombo: { type: Number, default: 0 },
     stockFinal: { type: Number, required: true },
     stockObjectiveTomorrow: { type: Number, required: true },
     pedidoSugerido: { type: Number, required: true },
