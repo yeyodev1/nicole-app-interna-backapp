@@ -49,7 +49,7 @@ export interface IWebOrder {
   customerIdNumber?: string;
   /** Quien compró (v7). customerName/customerPhone del pedido son de quien recibe/retira. */
   buyer?: { name?: string; phone?: string };
-  /** Método de pago tal cual lo manda la tienda: 'Payphone' | 'Transferencia'. */
+  /** Método de pago tal cual lo manda la tienda: 'Payphone' | 'Transferencia' | 'Reserva' (sin pago). */
   paymentMethod?: string;
   paymentStatus?: "PAID" | "PENDING_VERIFICATION";
   paymentReference?: string;
