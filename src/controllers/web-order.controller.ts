@@ -38,7 +38,12 @@ const optionalString = (v: unknown): string | undefined => (isNonEmptyString(v) 
 const isProofUrl = (v: unknown): v is string => isNonEmptyString(v) && /^https:\/\/\S+$/.test(v.trim()) && v.length <= 1000;
 const PROOF_RECEIVED = "Comprobante de transferencia recibido";
 
+/** Reserva (link de Navidad del CRM): el cliente no pagó; ventas lo contacta, confirma y cobra. */
+const RESERVA = "Reserva";
+const RESERVA_NOTE = "RESERVA SIN PAGO: falta cobrar. Contactar al cliente para confirmar los datos del pedido y el pago.";
+
 function paymentMethodLabel(method: string, status: WebPaymentStatus): string {
+  if (method === RESERVA) return "Reserva (falta el pago · contactar al cliente)";
   if (method === "Payphone") return "Payphone (pagado)";
   return status === "PAID" ? "Transferencia (verificada)" : "Transferencia (por verificar)";
 }
@@ -178,8 +183,11 @@ function validateWebOrderBody(body: any): string[] {
   if (!isFiniteNumber(body.totalValue) || body.totalValue < 0) {
     errors.push("totalValue debe ser un número mayor o igual a 0.");
   }
-  if (body.paymentMethod !== "Payphone" && body.paymentMethod !== "Transferencia") {
-    errors.push("paymentMethod debe ser 'Payphone' o 'Transferencia'.");
+  if (body.paymentMethod !== "Payphone" && body.paymentMethod !== "Transferencia" && body.paymentMethod !== RESERVA) {
+    errors.push("paymentMethod debe ser 'Payphone', 'Transferencia' o 'Reserva'.");
+  }
+  if (body.paymentMethod === RESERVA && body.paymentStatus === "PAID") {
+    errors.push("Una reserva no llega pagada: paymentStatus debe ser 'PENDING_VERIFICATION'.");
   }
   if (body.paymentStatus !== "PAID" && body.paymentStatus !== "PENDING_VERIFICATION") {
     errors.push("paymentStatus debe ser 'PAID' o 'PENDING_VERIFICATION'.");
@@ -249,7 +257,7 @@ async function notifySalesTeamWebOrder(order: any) {
     users.map((u: any) => ({
       user: u._id,
       type: "WEB_ORDER_NEW",
-      title: `Nuevo pedido web · ${order.customerName}`,
+      title: `${order.webOrder?.paymentMethod === RESERVA ? "Reserva web (sin pago, contactar)" : "Nuevo pedido web"} · ${order.customerName}`,
       message: `$${Number(order.totalValue || 0).toFixed(2)} · ${order.deliveryType === "delivery" ? "Delivery" : `Retiro en ${order.branch || "tienda"}`}${when ? ` · ${when} ${order.deliveryTime || ""}` : ""}`,
       orderId: order._id,
     }))
@@ -338,7 +346,9 @@ export async function createWebOrder(req: Request, res: Response, next: NextFunc
       ? `Compra: ${[buyerName, buyerPhone].filter(Boolean).join(" · ")} · ${isDelivery ? "Recibe" : "Retira"}: ${recipientName} · ${recipientPhone}`
       : null;
 
+    const isReserva = body.paymentMethod === RESERVA;
     const commentLines = [
+      isReserva ? RESERVA_NOTE : null,
       `Pedido web ${code}`,
       contactLine,
       `Email: ${customerEmail}`,
@@ -350,7 +360,7 @@ export async function createWebOrder(req: Request, res: Response, next: NextFunc
     ].filter(Boolean);
 
     const auditDetails = [
-      `Código ${code} · ${body.paymentMethod} (${paymentStatus === "PAID" ? "pagado" : "por verificar"}) · Total $${Number(body.totalValue).toFixed(2)}`,
+      `Código ${code} · ${body.paymentMethod} (${isReserva ? "sin pago, contactar" : paymentStatus === "PAID" ? "pagado" : "por verificar"}) · Total $${Number(body.totalValue).toFixed(2)}`,
       unmatched.length > 0 ? `Productos sin código de Contífico (revisar antes de facturar): ${unmatched.join(", ")}` : null,
     ].filter(Boolean).join(". ");
 
@@ -383,7 +393,7 @@ export async function createWebOrder(req: Request, res: Response, next: NextFunc
       auditLog: [
         {
           user: WEB_ORDER_CHANNEL,
-          action: "Pedido recibido desde la tienda online",
+          action: isReserva ? "Reserva recibida desde la tienda online (sin pago)" : "Pedido recibido desde la tienda online",
           at: now,
           details: auditDetails,
         },
