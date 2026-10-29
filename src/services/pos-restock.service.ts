@@ -4,7 +4,7 @@ import { getEcuadorNow } from "../utils/date.utils";
 import { IPOSStockObjective, WeeklyObjectives } from "../models/pos-stock-objective.model";
 import { IPOSDailyEntry } from "../models/pos-daily-entry.model";
 import { ContificoService } from "./contifico.service";
-import { getBranchPuntoCodes, getBranchExtraChannels } from "../config/contifico-pos.config";
+import { getBranchPuntoCodes } from "../config/contifico-pos.config";
 import { normalizeString } from "../utils/string.utils";
 import { buildContificoCategoryMaps } from "../utils/contifico-categorias.util";
 import { receptionDayOf, receptionCandidatesQuery } from "../utils/reception-day.util";
@@ -176,16 +176,14 @@ export class POSRestockService {
 
   /**
    * Venta del día de una sucursal según Contífico, alineada a los productos
-   * configurados en sus objetivos de stock. `products` es la venta de la isla;
-   * `channels` la de las otras cajas que venden producto de esa isla (Casa Mía
-   * y Dela Crem en Mall del Sol). `available: false` cuando la sucursal no
+   * configurados en sus objetivos de stock. `available: false` cuando la sucursal no
    * tiene punto de emisión mapeado o Contífico falla: la pantalla nunca se
    * bloquea por esto.
    */
   async getDailySales(branch: string, dateStr?: string) {
     const ecNow = getEcuadorNow();
     const date = dateStr || ecNow.toISOString().split("T")[0];
-    const empty = { branch, date, available: false, puntos: [] as string[], products: {} as Record<string, number>, channels: [] as Array<{ key: string; label: string; products: Record<string, number> }> };
+    const empty = { branch, date, available: false, puntos: [] as string[], products: {} as Record<string, number> };
 
     try {
       const puntosEmision = await this.getPuntosEmisionCached();
@@ -222,19 +220,12 @@ export class POSRestockService {
         return products;
       };
 
-      const channels = getBranchExtraChannels(branch).map((ch) => ({
-        key: ch.key,
-        label: ch.label,
-        products: sumFor(puntosEmision.filter((p: any) => ch.codes.includes(codeOf(p)))),
-      }));
-
       return {
         branch,
         date,
         available: true,
         puntos: targets.map((p: any) => `${codeOf(p)} ${p.direccion || p.nombre || ""}`.trim()),
         products: sumFor(targets),
-        channels,
       };
     } catch (err: any) {
       console.warn(`⚠️ [POS] No se pudo leer la venta de ${branch} (${date}) en Contífico: ${err?.message || err}`);
@@ -433,6 +424,8 @@ export class POSRestockService {
       bajas: number;
       bajasNote?: string;
       ventaCombo?: number;
+      ventaCasaMia?: number;
+      ventaDelaCrem?: number;
       stockFinal: number;
       pedidoFinal?: number;
       deliveryRounds?: Array<{ label: string; quantity: number }>;
@@ -508,6 +501,8 @@ export class POSRestockService {
         bajas: item.bajas,
         bajasNote: item.bajasNote,
         ventaCombo: Math.max(0, Number(item.ventaCombo) || 0),
+        ventaCasaMia: Math.max(0, Number(item.ventaCasaMia) || 0),
+        ventaDelaCrem: Math.max(0, Number(item.ventaDelaCrem) || 0),
         stockFinal: item.stockFinal,
         stockObjectiveTomorrow,
         pedidoSugerido,
@@ -891,7 +886,6 @@ export class POSRestockService {
           const stockInicial = prevItem ? prevItem.stockFinal : null;
           const recibido = received.get(`${bk}|${dateStr}|${item.productName}`) ?? 0;
           const bajas = item.bajas ?? 0;
-          const ventaCombo = item.ventaCombo ?? 0;
           const stockFinal = item.stockFinal ?? 0;
 
           rows.push({
@@ -903,7 +897,9 @@ export class POSRestockService {
             recibido,
             bajas,
             bajasNote: item.bajasNote,
-            ventaCombo,
+            ventaCombo: item.ventaCombo ?? 0,
+            ventaCasaMia: item.ventaCasaMia ?? 0,
+            ventaDelaCrem: item.ventaDelaCrem ?? 0,
             stockFinal,
             stockObjectiveTomorrow: item.stockObjectiveTomorrow ?? 0,
             pedidoFinal: item.pedidoFinal ?? 0,

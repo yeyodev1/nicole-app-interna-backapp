@@ -168,11 +168,9 @@ export class OperationsReportService {
     categoryMaps: CategoryMaps,
     dispatchMap: Map<string, { ok: number; sinOk: number }>
   ): Promise<OperationsBranchReport> {
-    // Venta de Contífico acumulada en el rango (cada día sale de la caché Mongo):
-    // la de la isla y la de las otras cajas que venden su producto.
+    // Venta de la isla en Contífico acumulada en el rango (caché Mongo por día).
     let salesAvailable = false;
     const salesTotals: Record<string, number> = {};
-    const channelTotals: Record<string, Record<string, number>> = {};
     const add = (acc: Record<string, number>, products: Record<string, number>) => {
       for (const [name, qty] of Object.entries(products)) acc[name] = (acc[name] || 0) + qty;
     };
@@ -181,7 +179,6 @@ export class OperationsReportService {
       if (!daySales.available) continue;
       salesAvailable = true;
       add(salesTotals, daySales.products);
-      for (const ch of daySales.channels) add((channelTotals[ch.key] ||= {}), ch.products);
     }
     const sales = { available: salesAvailable, products: salesTotals };
     const firstDay = days[0];
@@ -238,11 +235,6 @@ export class OperationsReportService {
 
     if (sales.available) {
       for (const [name, qty] of Object.entries(sales.products)) getRow(name).ventas.isla = qty;
-      for (const [key, products] of Object.entries(channelTotals)) {
-        for (const [name, qty] of Object.entries(products)) {
-          (getRow(name).ventas as Record<string, number>)[key] = qty;
-        }
-      }
     }
     for (const r of rows) {
       const row = getRow(r.productName);
@@ -253,7 +245,10 @@ export class OperationsReportService {
         row.pedidoFinal = r.pedidoFinal || 0;
       }
       row.bajas += r.bajas || 0;
+      // Combo, Casa Mía y Dela Cream los escribe la isla en el cierre
       row.ventas.combo += r.ventaCombo || 0;
+      row.ventas.casaMia += r.ventaCasaMia || 0;
+      row.ventas.delaCrem += r.ventaDelaCrem || 0;
       if (r.ventaImplicita !== null && r.ventaImplicita !== undefined) {
         row.ventaCierre = (row.ventaCierre || 0) + r.ventaImplicita;
       }
