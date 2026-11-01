@@ -9,6 +9,9 @@ import { HttpStatusCode } from "axios";
  * `WEB_ORDERS_API_KEY`. Se comparan los hashes SHA-256 de ambas con `timingSafeEqual`
  * para que el tiempo de respuesta no revele ni el contenido ni el largo de la clave.
  *
+ * La tienda de Sucrée (mismo dueño) usa su propia clave, `WEB_ORDERS_API_KEY_SUCREE`,
+ * para poder revocarla sin tocar la de Nicole.
+ *
  * Sin la variable configurada la integración queda apagada (503) en vez de abierta.
  */
 export function webOrdersApiKeyMiddleware(req: Request, res: Response, next: NextFunction): void {
@@ -27,10 +30,13 @@ export function webOrdersApiKeyMiddleware(req: Request, res: Response, next: Nex
     return;
   }
 
-  const expectedHash = createHash("sha256").update(expectedKey).digest();
   const providedHash = createHash("sha256").update(providedKey).digest();
+  const validKeys = [expectedKey, process.env.WEB_ORDERS_API_KEY_SUCREE].filter((k): k is string => !!k);
+  const matches = validKeys.some((key) =>
+    timingSafeEqual(createHash("sha256").update(key).digest(), providedHash),
+  );
 
-  if (!timingSafeEqual(expectedHash, providedHash)) {
+  if (!matches) {
     res.status(HttpStatusCode.Unauthorized).send({ message: "Clave de acceso inválida." });
     return;
   }
