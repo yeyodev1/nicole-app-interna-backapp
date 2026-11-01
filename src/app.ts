@@ -4,6 +4,7 @@ import type { Response } from "express";
 import http from "http";
 import cors from "cors";
 import routerApi from "./routes";
+import { mountMcpOAuth } from "./routes/mcp-oauth.router";
 import { globalErrorHandler } from "./middlewares/globalErrorHandler.middleware";
 
 export default function createApp() {
@@ -37,6 +38,7 @@ export default function createApp() {
     res.send("factura y ordenes de nicole backend IS ALIVEEEEEEE debbbugeando:)");
   });
 
+  mountMcpOAuth(app);
   routerApi(app);
 
   app.use(globalErrorHandler);
