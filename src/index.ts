@@ -69,7 +69,7 @@ async function seedSellers() {
  */
 async function bootstrap() {
   try {
-    await dbConnect();
+    if (!(await dbConnect())) return; // sin base no se siembra; el middleware reintenta en cada solicitud
     const userService = new UserService();
     await userService.seedInitialUsers();
     await seedBranches();
