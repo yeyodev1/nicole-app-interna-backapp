@@ -15,8 +15,14 @@ McpPortalRouter.get("/users", McpController.listUsers);
 McpPortalRouter.post("/users", McpController.createUser);
 McpPortalRouter.patch("/users/:id", McpController.updateUser);
 McpPortalRouter.delete("/users/:id", McpController.deleteUser);
+McpPortalRouter.get("/oauth/check", McpController.oauthCheck);
+McpPortalRouter.post("/oauth/approve", McpController.oauthApprove);
 
 export const McpRouter = express.Router();
+// OAuth: URL única para todos; Claude manda al portal a iniciar sesión.
+McpRouter.post("/", McpController.mcpEndpoint);
+McpRouter.get("/", McpController.mcpMethodNotAllowed);
+McpRouter.delete("/", McpController.mcpMethodNotAllowed);
 McpRouter.post("/:token", McpController.mcpEndpoint);
 McpRouter.get("/:token", McpController.mcpMethodNotAllowed);
 McpRouter.delete("/:token", McpController.mcpMethodNotAllowed);
