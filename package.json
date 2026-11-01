@@ -9,6 +9,7 @@
     "start": "node dist/index.js",
     "format": "prettier --write 'src/**/*.{js,jsx,ts,tsx,json,css,scss,md}'",
     "seed:users": "ts-node-dev scripts/seed-users.ts",
+    "seed:mcp-users": "ts-node-dev --transpile-only scripts/seed-mcp-users.ts",
     "clean:replenishment": "ts-node-dev --transpile-only scripts/clean-replenishment.ts",
     "sync:objectives": "ts-node-dev --transpile-only scripts/sync-branch-objectives.ts",
     "seed:raw-materials": "ts-node-dev scripts/seed-raw-materials.ts",
@@ -22,6 +23,7 @@
   "dependencies": {
     "@google/genai": "^1.29.0",
     "@google/generative-ai": "^0.24.1",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "apify-client": "^2.19.0",
     "axios": "^1.9.0",
     "bcryptjs": "^3.0.2",
@@ -37,7 +39,8 @@
     "openai": "^5.10.2",
     "pdfkit": "^0.17.2",
     "resend": "^4.5.1",
-    "uuid": "^11.1.0"
+    "uuid": "^11.1.0",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/cors": "^2.8.18",

@@ -19,8 +19,10 @@ import { WarehouseLoanModel } from "./warehouse-loan.model";
 import { SellerModel } from "./seller.model";
 import { InvoiceSequenceModel } from "./invoice-sequence.model";
 import { NotificationModel } from "./notification.model";
+import { McpUserModel } from "./mcp-user.model";
 
 export const models = {
+  mcpUsers: McpUserModel,
   orders: OrderModel,
   dailySummaries: DailySummaryModel,
   users: UserModel,
