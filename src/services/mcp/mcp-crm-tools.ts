@@ -1,5 +1,8 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+/** Registro sin inferencia de tipos: con ~20 herramientas, tsc se quedaba sin memoria en Vercel. zod valida igual en ejecución. */
+const reg = (server: unknown) => (server as any).registerTool.bind(server) as (name: string, config: any, cb: (args: any) => Promise<any>) => void;
 import { ec, hl, hlConfigured, locationId, pipelines, stageMap, teamMap, userIdByName } from "./highlevel.service";
 
 /**
@@ -32,7 +35,7 @@ async function recentConversations(max: number, assignedTo?: string) {
 export function registerCrmTools(server: McpServer) {
   if (!hlConfigured()) return;
 
-  server.registerTool(
+  reg(server)(
     "crm_equipo",
     { title: "Equipo del CRM", description: "Personas del equipo de ventas/atención en el CRM (HighLevel) de Nicole.", inputSchema: {}, annotations: READ_ONLY },
     async () => {
@@ -44,7 +47,7 @@ export function registerCrmTools(server: McpServer) {
     }
   );
 
-  server.registerTool(
+  reg(server)(
     "crm_atencion",
     {
       title: "Quién atiende y cómo",
@@ -53,7 +56,7 @@ export function registerCrmTools(server: McpServer) {
       inputSchema: { revisar: z.number().int().min(20).max(500).default(200).describe("Cuántas conversaciones recientes revisar"), asesor: z.string().optional() },
       annotations: READ_ONLY,
     },
-    async ({ revisar, asesor }) => {
+    async ({ revisar, asesor }: any) => {
       try {
         const team = await teamMap();
         const convs = await recentConversations(revisar, await userIdByName(asesor));
@@ -79,7 +82,7 @@ export function registerCrmTools(server: McpServer) {
     }
   );
 
-  server.registerTool(
+  reg(server)(
     "crm_conversaciones",
     {
       title: "Conversaciones del CRM",
@@ -92,7 +95,7 @@ export function registerCrmTools(server: McpServer) {
       },
       annotations: READ_ONLY,
     },
-    async ({ asesor, solo_sin_responder, texto, limite }) => {
+    async ({ asesor, solo_sin_responder, texto, limite }: any) => {
       try {
         const team = await teamMap();
         const qs = new URLSearchParams({ locationId: locationId(), limit: "100", sort: "desc", sortBy: "last_message_date" });
@@ -123,7 +126,7 @@ export function registerCrmTools(server: McpServer) {
     }
   );
 
-  server.registerTool(
+  reg(server)(
     "crm_mensajes",
     {
       title: "Mensajes de una conversación",
@@ -131,7 +134,7 @@ export function registerCrmTools(server: McpServer) {
       inputSchema: { conversacion_id: z.string().min(5), limite: z.number().int().min(1).max(100).default(40) },
       annotations: READ_ONLY,
     },
-    async ({ conversacion_id, limite }) => {
+    async ({ conversacion_id, limite }: any) => {
       try {
         const team = await teamMap();
         const d = await hl<any>(`/conversations/${encodeURIComponent(conversacion_id)}/messages?limit=${limite}`);
@@ -153,7 +156,7 @@ export function registerCrmTools(server: McpServer) {
     }
   );
 
-  server.registerTool(
+  reg(server)(
     "crm_buscar_contactos",
     {
       title: "Buscar contactos",
@@ -161,7 +164,7 @@ export function registerCrmTools(server: McpServer) {
       inputSchema: { texto: z.string().min(2), limite: z.number().int().min(1).max(50).default(10) },
       annotations: READ_ONLY,
     },
-    async ({ texto, limite }) => {
+    async ({ texto, limite }: any) => {
       try {
         const team = await teamMap();
         const d = await hl<any>("/contacts/search", { method: "POST", body: { locationId: locationId(), pageLimit: limite, query: texto } });
@@ -184,10 +187,10 @@ export function registerCrmTools(server: McpServer) {
     }
   );
 
-  server.registerTool(
+  reg(server)(
     "crm_ver_contacto",
     { title: "Ver contacto", description: "Ficha completa de un contacto del CRM.", inputSchema: { contacto_id: z.string().min(5) }, annotations: READ_ONLY },
-    async ({ contacto_id }) => {
+    async ({ contacto_id }: any) => {
       try {
         const team = await teamMap();
         const { contact: c } = await hl<any>(`/contacts/${encodeURIComponent(contacto_id)}`);
@@ -209,7 +212,7 @@ export function registerCrmTools(server: McpServer) {
     }
   );
 
-  server.registerTool(
+  reg(server)(
     "crm_embudo",
     {
       title: "Embudo de ventas",
@@ -217,7 +220,7 @@ export function registerCrmTools(server: McpServer) {
       inputSchema: { asesor: z.string().optional() },
       annotations: READ_ONLY,
     },
-    async ({ asesor }) => {
+    async ({ asesor }: any) => {
       try {
         const uid = await userIdByName(asesor);
         const result: any[] = [];
@@ -236,7 +239,7 @@ export function registerCrmTools(server: McpServer) {
     }
   );
 
-  server.registerTool(
+  reg(server)(
     "crm_oportunidades",
     {
       title: "Oportunidades",
@@ -250,7 +253,7 @@ export function registerCrmTools(server: McpServer) {
       },
       annotations: READ_ONLY,
     },
-    async ({ etapa, estado, asesor, texto, limite }) => {
+    async ({ etapa, estado, asesor, texto, limite }: any) => {
       try {
         const [team, stages] = await Promise.all([teamMap(), stageMap()]);
         const qs = new URLSearchParams({ location_id: locationId(), limit: String(limite) });
@@ -286,7 +289,7 @@ export function registerCrmTools(server: McpServer) {
     }
   );
 
-  server.registerTool(
+  reg(server)(
     "crm_citas",
     {
       title: "Citas del CRM",
@@ -294,7 +297,7 @@ export function registerCrmTools(server: McpServer) {
       inputSchema: { desde: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), hasta: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) },
       annotations: READ_ONLY,
     },
-    async ({ desde, hasta }) => {
+    async ({ desde, hasta }: any) => {
       try {
         const team = await teamMap();
         const start = Date.parse(`${desde}T00:00:00-05:00`);

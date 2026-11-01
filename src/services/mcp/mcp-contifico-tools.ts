@@ -1,5 +1,8 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+/** Registro sin inferencia de tipos: con ~20 herramientas, tsc se quedaba sin memoria en Vercel. zod valida igual en ejecución. */
+const reg = (server: unknown) => (server as any).registerTool.bind(server) as (name: string, config: any, cb: (args: any) => Promise<any>) => void;
 import { ContificoService } from "../contifico.service";
 
 /**
@@ -14,7 +17,7 @@ const YMD = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Usa AAAA-MM-DD");
 const Empresa = z.enum(["nicole", "sucree", "ambas"]).default("ambas");
 const Tipo = z.enum(["FAC", "NCT", "PRE", "COT", "todos"]).default("FAC").describe("FAC factura, NCT nota de crédito, PRE pre-factura, COT cotización");
 
-const services = { nicole: new ContificoService("nicole"), sucree: new ContificoService("sucree") };
+const services: Record<string, ContificoService> = { nicole: new ContificoService("nicole"), sucree: new ContificoService("sucree") };
 const label = { nicole: "Nicole", sucree: "Sucrée" } as const;
 const empresas = (e: string) => (e === "ambas" ? (["nicole", "sucree"] as const) : ([e] as ("nicole" | "sucree")[]));
 const dmy = (ymd: string) => ymd.split("-").reverse().join("/");
@@ -64,7 +67,7 @@ function checkRange(desde: string, hasta: string) {
 }
 
 export function registerContificoTools(server: McpServer) {
-  server.registerTool(
+  reg(server)(
     "contifico_ventas",
     {
       title: "Ventas en Contífico (tiempo real)",
@@ -73,7 +76,7 @@ export function registerContificoTools(server: McpServer) {
       inputSchema: { desde: YMD, hasta: YMD, empresa: Empresa },
       annotations: READ_ONLY,
     },
-    async ({ desde, hasta, empresa }) => {
+    async ({ desde, hasta, empresa }: any) => {
       try {
         checkRange(desde, hasta);
         const out: Record<string, any> = {};
@@ -109,7 +112,7 @@ export function registerContificoTools(server: McpServer) {
     }
   );
 
-  server.registerTool(
+  reg(server)(
     "contifico_productos_vendidos",
     {
       title: "Productos vendidos en Contífico",
@@ -117,7 +120,7 @@ export function registerContificoTools(server: McpServer) {
       inputSchema: { desde: YMD, hasta: YMD, empresa: Empresa, limite: z.number().int().min(1).max(100).default(20) },
       annotations: READ_ONLY,
     },
-    async ({ desde, hasta, empresa, limite }) => {
+    async ({ desde, hasta, empresa, limite }: any) => {
       try {
         checkRange(desde, hasta);
         const out: Record<string, any> = {};
@@ -144,7 +147,7 @@ export function registerContificoTools(server: McpServer) {
     }
   );
 
-  server.registerTool(
+  reg(server)(
     "contifico_documentos",
     {
       title: "Documentos de Contífico",
@@ -161,7 +164,7 @@ export function registerContificoTools(server: McpServer) {
       },
       annotations: READ_ONLY,
     },
-    async ({ desde, hasta, empresa, tipo, cliente, vendedor, solo_pendientes_cobro, limite }) => {
+    async ({ desde, hasta, empresa, tipo, cliente, vendedor, solo_pendientes_cobro, limite }: any) => {
       try {
         checkRange(desde, hasta);
         const norm = (s: unknown) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
@@ -183,7 +186,7 @@ export function registerContificoTools(server: McpServer) {
     }
   );
 
-  server.registerTool(
+  reg(server)(
     "contifico_documento",
     {
       title: "Ver documento de Contífico",
@@ -191,7 +194,7 @@ export function registerContificoTools(server: McpServer) {
       inputSchema: { empresa: z.enum(["nicole", "sucree"]), id: z.string().min(5) },
       annotations: READ_ONLY,
     },
-    async ({ empresa, id }) => {
+    async ({ empresa, id }: any) => {
       try {
         const [d, pos] = await Promise.all([services[empresa].getDocument(id), posNames(empresa)]);
         return json({
@@ -212,7 +215,7 @@ export function registerContificoTools(server: McpServer) {
     }
   );
 
-  server.registerTool(
+  reg(server)(
     "contifico_productos",
     {
       title: "Productos de Contífico",
@@ -220,7 +223,7 @@ export function registerContificoTools(server: McpServer) {
       inputSchema: { empresa: z.enum(["nicole", "sucree"]), buscar: z.string().min(2), limite: z.number().int().min(1).max(50).default(15) },
       annotations: READ_ONLY,
     },
-    async ({ empresa, buscar, limite }) => {
+    async ({ empresa, buscar, limite }: any) => {
       try {
         const list: any[] = await services[empresa].getProducts({ filtro: buscar, result_size: limite });
         return json(
@@ -240,7 +243,7 @@ export function registerContificoTools(server: McpServer) {
     }
   );
 
-  server.registerTool(
+  reg(server)(
     "contifico_stock",
     {
       title: "Stock en Contífico",
@@ -248,7 +251,7 @@ export function registerContificoTools(server: McpServer) {
       inputSchema: { empresa: z.enum(["nicole", "sucree"]), producto_id: z.string().min(5) },
       annotations: READ_ONLY,
     },
-    async ({ empresa, producto_id }) => {
+    async ({ empresa, producto_id }: any) => {
       try {
         const [stock, bodegas] = await Promise.all([services[empresa].getStockByProduct(producto_id), services[empresa].getWarehouses()]);
         const names = new Map<string, string>((bodegas || []).map((b: any) => [b.id, b.nombre]));
@@ -259,7 +262,7 @@ export function registerContificoTools(server: McpServer) {
     }
   );
 
-  server.registerTool(
+  reg(server)(
     "contifico_cliente",
     {
       title: "Cliente en Contífico",
@@ -267,7 +270,7 @@ export function registerContificoTools(server: McpServer) {
       inputSchema: { empresa: z.enum(["nicole", "sucree"]), identificacion: z.string().min(10).max(13) },
       annotations: READ_ONLY,
     },
-    async ({ empresa, identificacion }) => {
+    async ({ empresa, identificacion }: any) => {
       try {
         const p = await services[empresa].findPersona(identificacion.replace(/\D/g, ""));
         if (!p) return json({ encontrado: false });

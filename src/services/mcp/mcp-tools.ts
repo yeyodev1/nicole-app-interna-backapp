@@ -3,6 +3,9 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { models } from "../../models";
 import { registerCrmTools } from "./mcp-crm-tools";
+
+/** Registro sin inferencia de tipos: con ~20 herramientas, tsc se quedaba sin memoria en Vercel. zod valida igual en ejecución. */
+const reg = (server: unknown) => (server as any).registerTool.bind(server) as (name: string, config: any, cb: (args: any) => Promise<any>) => void;
 import { registerContificoTools } from "./mcp-contifico-tools";
 
 /**
@@ -85,7 +88,7 @@ export function buildMcpServer(userEmail: string) {
     }
   );
 
-  server.registerTool(
+  reg(server)(
     "resumen_ventas",
     {
       title: "Resumen de ventas",
@@ -94,7 +97,7 @@ export function buildMcpServer(userEmail: string) {
       inputSchema: { desde: YMD, hasta: YMD, marca: Marca, fecha_por: FechaPor },
       annotations: READ_ONLY,
     },
-    async ({ desde, hasta, marca, fecha_por }) => {
+    async ({ desde, hasta, marca, fecha_por }: any) => {
       const orders: any[] = await models.orders
         .find({ ...range(desde, hasta, fecha_por), ...brandFilter(marca), ...NOT_VOID })
         .select("totalValue payments contificoSource salesChannel deliveryType")
@@ -123,7 +126,7 @@ export function buildMcpServer(userEmail: string) {
     }
   );
 
-  server.registerTool(
+  reg(server)(
     "buscar_pedidos",
     {
       title: "Buscar pedidos",
@@ -142,7 +145,7 @@ export function buildMcpServer(userEmail: string) {
       },
       annotations: READ_ONLY,
     },
-    async ({ desde, hasta, fecha_por, marca, canal, texto, pago, incluir_anulados, limite }) => {
+    async ({ desde, hasta, fecha_por, marca, canal, texto, pago, incluir_anulados, limite }: any) => {
       const q: any = { ...brandFilter(marca), ...(incluir_anulados ? {} : NOT_VOID) };
       if (desde || hasta) Object.assign(q, range(desde || hasta!, hasta || desde!, fecha_por));
       if (canal) q.salesChannel = canal;
@@ -164,7 +167,7 @@ export function buildMcpServer(userEmail: string) {
     }
   );
 
-  server.registerTool(
+  reg(server)(
     "ver_pedido",
     {
       title: "Ver pedido",
@@ -172,7 +175,7 @@ export function buildMcpServer(userEmail: string) {
       inputSchema: { id_o_codigo: z.string().min(3) },
       annotations: READ_ONLY,
     },
-    async ({ id_o_codigo }) => {
+    async ({ id_o_codigo }: any) => {
       const key = id_o_codigo.trim();
       const o: any = Types.ObjectId.isValid(key)
         ? await models.orders.findById(key).lean()
@@ -200,7 +203,7 @@ export function buildMcpServer(userEmail: string) {
     }
   );
 
-  server.registerTool(
+  reg(server)(
     "productos_mas_vendidos",
     {
       title: "Productos más vendidos",
@@ -208,7 +211,7 @@ export function buildMcpServer(userEmail: string) {
       inputSchema: { desde: YMD, hasta: YMD, marca: Marca, fecha_por: FechaPor, limite: z.number().int().min(1).max(100).default(20) },
       annotations: READ_ONLY,
     },
-    async ({ desde, hasta, marca, fecha_por, limite }) => {
+    async ({ desde, hasta, marca, fecha_por, limite }: any) => {
       const rows = await models.orders.aggregate([
         { $match: { ...range(desde, hasta, fecha_por), ...brandFilter(marca), ...NOT_VOID } },
         { $unwind: "$products" },
@@ -231,7 +234,7 @@ export function buildMcpServer(userEmail: string) {
     }
   );
 
-  server.registerTool(
+  reg(server)(
     "entregas_del_dia",
     {
       title: "Entregas del día",
@@ -239,7 +242,7 @@ export function buildMcpServer(userEmail: string) {
       inputSchema: { fecha: YMD, marca: Marca, tipo: z.enum(["todos", "delivery", "retiro"]).default("todos") },
       annotations: READ_ONLY,
     },
-    async ({ fecha, marca, tipo }) => {
+    async ({ fecha, marca, tipo }: any) => {
       const q: any = { ...range(fecha, fecha, "entrega"), ...brandFilter(marca), ...NOT_VOID };
       if (tipo !== "todos") q.deliveryType = tipo;
       const orders: any[] = await models.orders
@@ -257,7 +260,7 @@ export function buildMcpServer(userEmail: string) {
     }
   );
 
-  server.registerTool(
+  reg(server)(
     "estado_facturacion",
     {
       title: "Estado de facturación",
@@ -265,7 +268,7 @@ export function buildMcpServer(userEmail: string) {
       inputSchema: { desde: YMD, hasta: YMD, marca: Marca, fecha_por: FechaPor },
       annotations: READ_ONLY,
     },
-    async ({ desde, hasta, marca, fecha_por }) => {
+    async ({ desde, hasta, marca, fecha_por }: any) => {
       const orders: any[] = await models.orders
         .find({ ...range(desde, hasta, fecha_por), ...brandFilter(marca), ...NOT_VOID })
         .select("customerName invoiceStatus invoiceError settledInIsland totalValue createdAt deliveryDate contificoSource")
