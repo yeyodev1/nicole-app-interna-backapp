@@ -253,6 +253,11 @@ export class OperationsReportService {
         row.ventaCierre = (row.ventaCierre || 0) + r.ventaImplicita;
       }
     }
+    // Inventario inicial cargado por Operaciones para el primer día: es el "empezó",
+    // aunque la sucursal todavía no haya hecho el cierre de ese día.
+    const initialItems = await this.posRestock.initialItemsFor(branch, firstDay);
+    for (const it of initialItems) getRow(it.productName).inicial = it.quantity;
+
     for (const [key, row] of byName) {
       // Todo lo que diga venta resta del stock, igual que las bajas
       if (sales.available) {

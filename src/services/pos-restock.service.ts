@@ -885,7 +885,7 @@ export class POSRestockService {
 
         for (const item of entry.items || []) {
           const prevItem = entryIndex.get(`${bk}|${prevStr}|${item.productName}`);
-          const initial = initialIndex.get(`${bk}|${dateStr}|${item.productName}`);
+          const initial = initialIndex.get(`${bk}|${dateStr}|${normalizeString(item.productName)}`);
           const stockInicial = initial !== undefined ? initial : prevItem ? prevItem.stockFinal : null;
           const recibido = received.get(`${bk}|${dateStr}|${item.productName}`) ?? 0;
           const bajas = item.bajas ?? 0;
@@ -1032,14 +1032,25 @@ export class POSRestockService {
     return created.toObject();
   }
 
-  /** Inventarios iniciales de un rango, indexados por `${branchKey}|${YYYY-MM-DD}|${producto}`. */
+  /**
+   * Inventarios iniciales de un rango, indexados por `${branchKey}|${YYYY-MM-DD}|${producto normalizado}`
+   * (sin mayúsculas ni tildes: el nombre del cierre puede venir escrito distinto).
+   */
   async initialInventoryIndex(from: Date, to: Date): Promise<Map<string, number>> {
-    const list: any[] = await models.initialInventories.find({ date: { $gte: from, $lte: to } }).lean();
+    const start = new Date(from);
+    start.setUTCHours(0, 0, 0, 0);
+    const list: any[] = await models.initialInventories.find({ date: { $gte: start, $lte: to } }).lean();
     const index = new Map<string, number>();
     for (const inv of list) {
       const key = `${String(inv.branch).trim().toLowerCase()}|${toDateStr(new Date(inv.date))}`;
-      for (const it of inv.items || []) index.set(`${key}|${it.productName}`, Number(it.quantity) || 0);
+      for (const it of inv.items || []) index.set(`${key}|${normalizeString(it.productName)}`, Number(it.quantity) || 0);
     }
     return index;
+  }
+
+  /** Productos del inventario inicial de una sucursal en un día ([] si no hay). */
+  async initialItemsFor(branch: string, date: string): Promise<Array<{ productName: string; quantity: number }>> {
+    const inv: any = await models.initialInventories.findOne({ branch: branchMatch(branch), date: parseDateStr(date) }).lean();
+    return (inv?.items || []).map((i: any) => ({ productName: i.productName, quantity: Number(i.quantity) || 0 }));
   }
 }
