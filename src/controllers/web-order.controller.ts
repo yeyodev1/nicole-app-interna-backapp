@@ -29,6 +29,17 @@ const IVA_RATE = 1.15;
 const CONTIFICO_MATCH_TIMEOUT_MS = 8000;
 
 const nicoleContificoService = new ContificoService("nicole");
+const sucreeContificoService = new ContificoService("sucree");
+
+/**
+ * Marca del pedido web: la tienda de Sucrée (sucree.com.ec) manda `brand: "sucree"`
+ * y sus códigos empiezan con "SC-". Define la cuenta de Contífico (catálogo y factura)
+ * y el filtro Nicole/Sucrée de la app.
+ */
+function webOrderSource(body: any): "nicole" | "sucree" {
+  if (body?.brand === "sucree") return "sucree";
+  return /^SC-/i.test(String(body?.orderCode ?? "").trim()) ? "sucree" : "nicole";
+}
 
 type WebPaymentStatus = "PAID" | "PENDING_VERIFICATION";
 
@@ -217,13 +228,16 @@ function validateWebOrderBody(body: any): string[] {
  * Catálogo de Nicole en Contífico (caché de 1 h del servicio). Nunca lanza:
  * si Contífico falla o tarda, devuelve `null` y el pedido se guarda igual.
  */
-async function getNicoleCatalogSafe(timeoutMs = CONTIFICO_MATCH_TIMEOUT_MS): Promise<any[] | null> {
+async function getNicoleCatalogSafe(
+  timeoutMs = CONTIFICO_MATCH_TIMEOUT_MS,
+  service: ContificoService = nicoleContificoService,
+): Promise<any[] | null> {
   let timer: NodeJS.Timeout | undefined;
   try {
     const timeout = new Promise<null>((resolve) => {
       timer = setTimeout(() => resolve(null), timeoutMs);
     });
-    const result = await Promise.race([nicoleContificoService.getCachedProducts(), timeout]);
+    const result = await Promise.race([service.getCachedProducts(), timeout]);
     return Array.isArray(result) ? result : null;
   } catch (error: any) {
     console.warn("⚠️ [web-orders] No se pudo leer el catálogo de Contífico:", error?.message || error);
@@ -275,6 +289,7 @@ export async function createWebOrder(req: Request, res: Response, next: NextFunc
     }
 
     const externalId = String(body.externalId).trim();
+    const source = webOrderSource(body);
 
     const existing = await models.orders.findOne({ "webOrder.externalId": externalId }, { _id: 1 }).lean();
     if (existing) {
@@ -306,14 +321,18 @@ export async function createWebOrder(req: Request, res: Response, next: NextFunc
         name: "Delivery",
         quantity: 1,
         price: deliveryValue,
-        ...(CONTIFICO_DELIVERY_ID ? { contifico_id: CONTIFICO_DELIVERY_ID } : {}),
+        // El Delivery de Contífico es de la cuenta Nicole; en Sucrée se empareja por nombre.
+        ...(CONTIFICO_DELIVERY_ID && source === "nicole" ? { contifico_id: CONTIFICO_DELIVERY_ID } : {}),
       });
     }
 
     // 2. Emparejar con Contífico por nombre los que llegan sin contifico_id.
     const unmatched: string[] = [];
     if (products.some((p) => !p.contifico_id)) {
-      const catalog = await getNicoleCatalogSafe();
+      const catalog = await getNicoleCatalogSafe(
+        CONTIFICO_MATCH_TIMEOUT_MS,
+        source === "sucree" ? sucreeContificoService : nicoleContificoService,
+      );
       for (const p of products) {
         if (p.contifico_id) continue;
         const id = catalog ? matchContificoIdByName(catalog, p.name) : undefined;
@@ -350,7 +369,7 @@ export async function createWebOrder(req: Request, res: Response, next: NextFunc
     const isReserva = body.paymentMethod === RESERVA;
     const commentLines = [
       isReserva ? RESERVA_NOTE : null,
-      `Pedido web ${code}`,
+      `Pedido web ${code}${source === "sucree" ? " · tienda Sucrée" : ""}`,
       contactLine,
       `Email: ${customerEmail}`,
       customerIdNumber ? `Cédula/RUC: ${customerIdNumber}` : null,
@@ -388,7 +407,7 @@ export async function createWebOrder(req: Request, res: Response, next: NextFunc
       responsible: WEB_ORDER_CHANNEL,
       createdBy: WEB_ORDER_CHANNEL,
       updatedBy: WEB_ORDER_CHANNEL,
-      contificoSource: "nicole",
+      contificoSource: source,
       status: WEB_ORDER_STATUS_PENDING,
       comments: commentLines.join("\n"),
       auditLog: [
