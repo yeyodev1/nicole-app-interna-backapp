@@ -5,6 +5,8 @@ import http from "http";
 import cors from "cors";
 import routerApi from "./routes";
 import { mountMcpOAuth } from "./routes/mcp-oauth.router";
+import mongoose from "mongoose";
+import { ensureDb } from "./config/mongo";
 import { globalErrorHandler } from "./middlewares/globalErrorHandler.middleware";
 
 export default function createApp() {
@@ -36,6 +38,27 @@ export default function createApp() {
 
   app.get("/", (_req, res: Response) => {
     res.send("factura y ordenes de nicole backend IS ALIVEEEEEEE debbbugeando:)");
+  });
+
+  // Antes de cualquier ruta: asegura la conexión a Mongo (la rehace si se cayó).
+  app.use(async (_req, res, next) => {
+    try {
+      await ensureDb();
+      next();
+    } catch (error) {
+      console.error("❌ Sin conexión a la base de datos:", error);
+      res.status(503).json({ message: "La base de datos no responde. Intenta de nuevo en unos segundos." });
+    }
+  });
+
+  // Salud del sistema (para monitoreo): 200 solo si Mongo responde.
+  app.get("/api/health", async (_req, res: Response) => {
+    try {
+      await mongoose.connection.db!.admin().ping();
+      res.status(200).json({ ok: true, db: "ok", at: new Date().toISOString() });
+    } catch (error) {
+      res.status(503).json({ ok: false, db: "error" });
+    }
   });
 
   mountMcpOAuth(app);
