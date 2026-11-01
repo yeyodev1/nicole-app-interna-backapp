@@ -62,28 +62,31 @@ async function seedSellers() {
   console.log("Default sellers ensured.");
 }
 
-async function main() {
-  await dbConnect();
+/**
+ * El servidor escucha de inmediato: en Vercel (modo "legacy server") la función falla con
+ * FUNCTION_INVOCATION_FAILED si tarda en escuchar en un arranque en frío. La conexión a
+ * Mongo y las semillas corren en paralelo; mongoose encola las consultas hasta conectar.
+ */
+async function bootstrap() {
+  try {
+    await dbConnect();
+    const userService = new UserService();
+    await userService.seedInitialUsers();
+    await seedBranches();
+    await seedSellers();
+  } catch (error) {
+    console.error("❌ Error al conectar o sembrar datos iniciales:", error);
+  }
+}
 
-  // Seed default users
-  const userService = new UserService();
-  await userService.seedInitialUsers();
-
-  // Seed default branches (only if none exist)
-  await seedBranches();
-
-  // Seed default sellers (comisiones en la factura)
-  await seedSellers();
-
-  const { app, server } = createApp();
-
+function main() {
+  const { server } = createApp();
   server.timeout = 10 * 60 * 1000;
-
   const port: number | string = process.env.PORT || 8100;
-
   server.listen(port, () => {
     console.log(`Server running on port ${port}`);
   });
+  void bootstrap();
 }
 
 main();
