@@ -15,6 +15,8 @@ router.get("/", authMiddleware as any, OrderController.getOrders);
 router.get("/invoice-status", authMiddleware as any, OrderController.getInvoiceStatus);
 
 // GET /api/orders/reports/delivery
+router.get("/delivery-slots", authMiddleware as any, OrderController.getDeliverySlots);
+
 router.get("/reports/delivery", authMiddleware as any, OrderController.getDeliveryReport);
 
 // GET /api/orders/:id

@@ -11,7 +11,7 @@ import {
   isExcludedSequential,
 } from "../config/contifico-emision.config";
 import { CONTIFICO_CUENTA_BANCARIA_TRA } from "../config/contifico-cobro.config";
-import { isPrecioIvaIncluido } from "../config/precio-final.config";
+import { isPrecioIvaIncluido, lineDiscountPercent } from "../config/precio-final.config";
 import CustomError from "../errors/customError.error";
 
 /**
@@ -220,15 +220,8 @@ export class ContificoService {
         const ivaIncluido = isPrecioIvaIncluido(p);
         const calcPrice = ivaIncluido ? precio / 1.15 : precio;
 
-        // Apply Discount Logic (Courtesy = 100%)
-        let discountPercentage = p.isCourtesy ? 100 : 0;
-
-        // Apply Global Overrides
-        if (orderData.isGlobalCourtesy) {
-          discountPercentage = 100;
-        } else if (orderData.globalDiscountPercentage > 0 && discountPercentage < 100) {
-          discountPercentage = orderData.globalDiscountPercentage;
-        }
+        // Cortesía = 100%; el descuento global no toca la línea de delivery.
+        const discountPercentage = lineDiscountPercent(p, orderData);
 
         // Total Line = Qty * Price * (1 - Discount/100)
         // If 100% discount, totalLine becomes 0, so it doesn't add to the invoice totals
@@ -977,12 +970,7 @@ export class ContificoService {
         let calcPrice = precio;
         if (ivaIncluido) calcPrice = precio / 1.15;
 
-        let discountPercentage = p.isCourtesy ? 100 : 0;
-        if (orderData.isGlobalCourtesy) {
-          discountPercentage = 100;
-        } else if (orderData.globalDiscountPercentage > 0 && discountPercentage < 100) {
-          discountPercentage = orderData.globalDiscountPercentage;
-        }
+        const discountPercentage = lineDiscountPercent(p, orderData);
 
         const totalLine = cantidad * calcPrice * ((100 - discountPercentage) / 100);
         const base_gravable = Number(totalLine.toFixed(2));

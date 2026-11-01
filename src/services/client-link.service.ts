@@ -8,6 +8,7 @@ import { ContificoService } from "./contifico.service";
 import { issueInvoiceNow } from "./invoice-issue.service";
 import type { NotificationType } from "../models/notification.model";
 import { normalizeEcPhone } from "../utils/phone.utils";
+import { assertDeliverySlotAvailable } from "./delivery-capacity.service";
 
 /**
  * Link de gestión de entrega (contrato v8).
@@ -274,6 +275,8 @@ export async function completeClientLink(token: string, body: any) {
   if (!isValidYmd(date)) throw new CustomError("Elige una fecha de entrega válida.", 400);
   if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) throw new CustomError("Elige un horario válido.", 400);
   if (date < todayInGuayaquil()) throw new CustomError("La fecha de entrega ya pasó. Elige hoy o un día posterior.", 400);
+  // Máximo 8 deliveries por hora (el retiro no tiene límite).
+  if (link.plannedType === "delivery") await assertDeliverySlotAvailable(date, time, String(order._id));
 
   // Recibe quien llena el link (si es para otra persona, el cliente le reenvía el link).
   // El WhatsApp de la venta queda como el del comprador; si faltaba su nombre, se toma
