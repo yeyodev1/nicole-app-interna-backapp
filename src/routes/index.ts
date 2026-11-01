@@ -24,6 +24,7 @@ import SellerRouter from "./seller.router";
 import WebOrderRouter from "./web-order.router";
 import NotificationRouter from "./notification.router";
 import PayphoneRouter from "./payphone.router";
+import { McpPortalRouter, McpRouter } from "./mcp.router";
 
 import { WarehouseRouter } from "./warehouse.routes";
 
@@ -31,6 +32,8 @@ function routerApi(app: Application) {
   const router = express.Router();
   app.use("/api", router);
   router.use("/orders", OrderRouter);
+  router.use("/mcp-portal", McpPortalRouter);
+  router.use("/mcp", McpRouter);
   router.use("/products", ProductRouter);
   router.use("/persons", PersonRouter);
   router.use("/documents", DocumentRouter);
