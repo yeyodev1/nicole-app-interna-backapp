@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { CONTIFICO_CUENTA_BANCARIA_TRA } from "../config/contifico-cobro.config";
-import { isPrecioIvaIncluido } from "../config/precio-final.config";
+import { isPrecioIvaIncluido, lineDiscountPercent } from "../config/precio-final.config";
 import axios, { HttpStatusCode } from "axios";
 import { models } from "../models";
 import { ContificoService, assertWebOrderProductsLinked } from "../services/contifico.service";
@@ -11,6 +11,7 @@ import { Types } from "mongoose";
 import { applyWebPayment, queueWebInvoice } from "./web-order.controller";
 import { applyClientLinkMode, clientLinkUrl, clientWhatsappMessage } from "../services/client-link.service";
 import { normalizeEcPhone, phoneSearchRegex } from "../utils/phone.utils";
+import { assertDeliverySlotAvailable, deliverySlotsFor, ymdOf } from "../services/delivery-capacity.service";
 
 const nicoleContificoService = new ContificoService('nicole');
 const sucreeContificoService = new ContificoService('sucree');
@@ -215,19 +216,14 @@ export async function createOrder(req: AuthRequest, res: Response, next: NextFun
         orderData.totalValue = 0;
       } else {
         const subtotal = orderData.products.reduce((sum: number, p: any) => {
-          let discount = p.isCourtesy ? 100 : 0;
-          if (orderData.globalDiscountPercentage > 0 && discount < 100) {
-            discount = orderData.globalDiscountPercentage;
-          }
+          // El descuento global no toca el delivery (ver lineDiscountPercent).
+          const discount = lineDiscountPercent(p, orderData);
           const itemTotal = (Number(p.price) * Number(p.quantity)) * ((100 - discount) / 100);
           return sum + itemTotal;
         }, 0);
 
         const iva = orderData.products.reduce((sum: number, p: any) => {
-          let discount = p.isCourtesy ? 100 : 0;
-          if (orderData.globalDiscountPercentage > 0 && discount < 100) {
-            discount = orderData.globalDiscountPercentage;
-          }
+          const discount = lineDiscountPercent(p, orderData);
           // El precio de delivery y de la Torta Personalizada ya trae el IVA dentro,
           // así que no se le suma nada encima (ver precio-final.config.ts).
           if (isPrecioIvaIncluido(p)) return sum;
@@ -257,6 +253,12 @@ export async function createOrder(req: AuthRequest, res: Response, next: NextFun
     if (isClientLink) {
       orderData.clientLink.estimatedDeliveryValue = Number(orderData.deliveryValue) || 0;
       orderData.auditLog[0].details = "Venta con link: el cliente completa la entrega y la factura.";
+    }
+
+    // Máximo 8 deliveries por hora (la venta con link se valida cuando el cliente elige la hora).
+    if (!isClientLink && orderData.deliveryType === "delivery") {
+      const ymd = ymdOf(orderData.deliveryDate);
+      if (ymd) await assertDeliverySlotAvailable(ymd, orderData.deliveryTime);
     }
 
     // 2. Save Order to Database
@@ -343,6 +345,10 @@ Valor Envío: $${orderData.deliveryValue || 0}
     });
     return;
   } catch (error) {
+    if (error instanceof CustomError) {
+      res.status(error.status).send({ message: error.message });
+      return;
+    }
     console.error("❌ Error in createOrder:", error);
     res.status(HttpStatusCode.InternalServerError).send({
       message: "Internal server error occurred while creating order.",
@@ -449,6 +455,12 @@ export async function getOrders(req: AuthRequest, res: Response, next: NextFunct
     }
     if (typeof req.query.salesChannel === 'string' && req.query.salesChannel) {
       query.salesChannel = req.query.salesChannel;
+    }
+    // Marca (Nicole / Sucrée). Los pedidos viejos sin contificoSource son de Nicole (default del esquema).
+    if (req.query.brand === 'sucree') {
+      query.contificoSource = 'sucree';
+    } else if (req.query.brand === 'nicole') {
+      query.contificoSource = { $ne: 'sucree' };
     }
 
     // 3. Execution
@@ -763,6 +775,15 @@ export async function updateOrder(req: AuthRequest, res: Response, next: NextFun
     if (updateData.deliveryTime) order.deliveryTime = updateData.deliveryTime;
     if (updateData.orderDate) order.orderDate = updateData.orderDate;
 
+    // Cupo de 8 deliveries por hora al reprogramar (o pasar a delivery); el propio pedido no cuenta.
+    if (
+      order.deliveryType === "delivery" &&
+      (order.isModified("deliveryDate") || order.isModified("deliveryTime") || order.isModified("deliveryType"))
+    ) {
+      const ymd = ymdOf(order.deliveryDate);
+      if (ymd) await assertDeliverySlotAvailable(ymd, order.deliveryTime, String(order._id));
+    }
+
 
     // NEW: Allow updating core order data (products, payments)
     if (updateData.products) order.products = updateData.products;
@@ -832,6 +853,10 @@ export async function updateOrder(req: AuthRequest, res: Response, next: NextFun
     });
     return;
   } catch (error) {
+    if (error instanceof CustomError) {
+      res.status(error.status).send({ message: error.message });
+      return;
+    }
     console.error("❌ Error in updateOrder:", error);
     res.status(HttpStatusCode.InternalServerError).send({
       message: "Internal server error while updating order.",
@@ -2477,5 +2502,17 @@ export async function deleteOrder(req: AuthRequest, res: Response, next: NextFun
       error: error instanceof Error ? error.message : String(error)
     });
     return;
+  }
+}
+
+/**
+ * GET /api/orders/delivery-slots?date=YYYY-MM-DD — cupo de deliveries por hora del día
+ * (máx. 8). El pedido manual deshabilita las horas llenas para delivery.
+ */
+export async function getDeliverySlots(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    res.status(HttpStatusCode.Ok).send(await deliverySlotsFor(String(req.query.date || "")));
+  } catch (error) {
+    next(error);
   }
 }

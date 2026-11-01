@@ -38,3 +38,26 @@ export function isPrecioIvaIncluido(item: { contifico_id?: string; name?: string
  * Env opcional: `CONTIFICO_DELIVERY_ID`.
  */
 export const CONTIFICO_DELIVERY_ID = (process.env.CONTIFICO_DELIVERY_ID || "0pZeVwVRNf8ZAaGW").trim();
+
+/** `true` si la línea es el envío (producto Delivery de Contífico o un ítem llamado "delivery"). */
+export function isDeliveryLine(item: { contifico_id?: string; name?: string }): boolean {
+  if (item.contifico_id && item.contifico_id === CONTIFICO_DELIVERY_ID) return true;
+  const name = String(item.name ?? "").toLowerCase();
+  return name.includes("delivery") || name.includes("envío") || name.includes("envio");
+}
+
+/**
+ * Descuento (%) de una línea. Decisión de Nicole (30/10/2026): los descuentos se
+ * calculan solo sobre los productos; el delivery se cobra completo siempre. La
+ * cortesía (de la línea o del pedido entero) sigue regalando todo, envío incluido.
+ * Debe coincidir con `lineDiscountPercent` de `src/constants/pricing.ts` del frontend.
+ */
+export function lineDiscountPercent(
+  item: { contifico_id?: string; name?: string; isCourtesy?: boolean },
+  order: { globalDiscountPercentage?: number; isGlobalCourtesy?: boolean },
+): number {
+  if (item.isCourtesy || order.isGlobalCourtesy) return 100;
+  const global = Number(order.globalDiscountPercentage) || 0;
+  if (global > 0 && !isDeliveryLine(item)) return Math.min(global, 100);
+  return 0;
+}

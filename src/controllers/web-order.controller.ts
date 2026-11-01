@@ -5,6 +5,7 @@ import { ContificoService } from "../services/contifico.service";
 import { isPrecioIvaIncluido, CONTIFICO_DELIVERY_ID } from "../config/precio-final.config";
 import { CONTIFICO_CUENTA_BANCARIA_TRA } from "../config/contifico-cobro.config";
 import { normalizeString } from "../utils/string.utils";
+import { deliverySlotsFor } from "../services/delivery-capacity.service";
 
 /**
  * Pedidos que llegan de la tienda online (nicole-tienda-backapp).
@@ -760,5 +761,18 @@ export async function getNotifyRecipients(req: Request, res: Response, next: Nex
     console.error("❌ [web-orders] Error leyendo destinatarios de avisos:", error);
     res.status(HttpStatusCode.InternalServerError).send({ message: "Error interno al leer los destinatarios de avisos." });
     return;
+  }
+}
+
+/**
+ * GET /api/web-orders/delivery-slots?date=YYYY-MM-DD — cupo de deliveries por hora
+ * (máx. 8, todos los canales). La tienda deshabilita las horas llenas y valida antes
+ * de crear un pedido con delivery.
+ */
+export async function getDeliverySlots(req: Request, res: Response, next: NextFunction) {
+  try {
+    res.status(HttpStatusCode.Ok).send(await deliverySlotsFor(String(req.query.date || "")));
+  } catch (error) {
+    next(error);
   }
 }
