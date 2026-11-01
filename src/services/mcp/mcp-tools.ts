@@ -2,6 +2,7 @@ import { Types } from "mongoose";
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { models } from "../../models";
+import { registerCrmTools } from "./mcp-crm-tools";
 
 /**
  * Herramientas de SOLO LECTURA del conector de Claude sobre los pedidos de Nicole y Sucrée
@@ -76,7 +77,8 @@ export function buildMcpServer(userEmail: string) {
       instructions:
         "Datos en vivo de la app interna de Nicole Pastry Arts y Sucrée (pedidos, ventas, entregas y facturación). " +
         `Solo lectura. Conectado como ${userEmail}. Fechas en hora de Ecuador (AAAA-MM-DD). ` +
-        "Montos en dólares con IVA (total del pedido). marca: nicole | sucree | todas.",
+        "Montos en dólares con IVA (total del pedido). marca: nicole | sucree | todas. " +
+        "Las herramientas crm_* leen el CRM (HighLevel) de Nicole: equipo, quién atiende y cómo, conversaciones, mensajes, contactos, embudo y citas.",
     }
   );
 
@@ -284,6 +286,8 @@ export function buildMcpServer(userEmail: string) {
       });
     }
   );
+
+  registerCrmTools(server);
 
   return server;
 }
