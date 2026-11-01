@@ -844,6 +844,8 @@ export class POSRestockService {
 
     // Recepciones confirmadas en el rango: dispatch.destination = sucursal.
     const received = await this.getReceivedByDay(fromDate, toDate);
+    // Inventario inicial registrado por Operaciones: manda sobre el cierre anterior.
+    const initialIndex = await this.initialInventoryIndex(fromDate, toDate);
 
     // Índice de cierres: `${branchKey}|${YYYY-MM-DD}|${producto}` → item
     const entryIndex = new Map<string, any>();
@@ -883,7 +885,8 @@ export class POSRestockService {
 
         for (const item of entry.items || []) {
           const prevItem = entryIndex.get(`${bk}|${prevStr}|${item.productName}`);
-          const stockInicial = prevItem ? prevItem.stockFinal : null;
+          const initial = initialIndex.get(`${bk}|${dateStr}|${item.productName}`);
+          const stockInicial = initial !== undefined ? initial : prevItem ? prevItem.stockFinal : null;
           const recibido = received.get(`${bk}|${dateStr}|${item.productName}`) ?? 0;
           const bajas = item.bajas ?? 0;
           const stockFinal = item.stockFinal ?? 0;
@@ -972,5 +975,71 @@ export class POSRestockService {
       }
     }
     return map;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // INVENTARIO INICIAL (Operaciones)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Inventario inicial de una sucursal y día. Si no existe, devuelve un borrador con los
+   * productos de la sucursal (objetivos de stock) y, como sugerencia, lo que quedó en el
+   * cierre del día anterior.
+   */
+  async getInitialInventory(branch: string, date: string) {
+    const day = parseDateStr(date);
+    const saved: any = await models.initialInventories.findOne({ branch: branchMatch(branch), date: day }).lean();
+    if (saved) return { exists: true, ...saved, date: toDateStr(new Date(saved.date)) };
+
+    const prev = new Date(day);
+    prev.setUTCDate(prev.getUTCDate() - 1);
+    const [objectives, prevEntry] = await Promise.all([
+      models.posStockObjectives.find({ branch: branchMatch(branch) }).lean() as any,
+      models.posDailyEntries.findOne({ branch: branchMatch(branch), date: prev }).lean() as any,
+    ]);
+    const prevByName = new Map<string, number>((prevEntry?.items || []).map((i: any) => [i.productName, i.stockFinal ?? 0]));
+    const names = new Map<string, string>();
+    for (const o of objectives || []) names.set(o.productName, o.unit || "unidad");
+    for (const i of prevEntry?.items || []) if (!names.has(i.productName)) names.set(i.productName, i.unit || "unidad");
+    const items = [...names]
+      .sort((a, b) => a[0].localeCompare(b[0], "es"))
+      .map(([productName, unit]) => ({ productName, unit, quantity: prevByName.get(productName) ?? 0 }));
+    return { exists: false, branch, date, items, suggestedFromClosing: !!prevEntry };
+  }
+
+  /** Guarda (o reemplaza) el inventario inicial de una sucursal y día. */
+  async saveInitialInventory(data: { branch: string; date: string; items: any[]; note?: string; user: string }) {
+    const day = parseDateStr(data.date);
+    const items = (data.items || [])
+      .map((i: any) => ({
+        productName: String(i?.productName ?? "").trim(),
+        unit: String(i?.unit ?? "unidad").trim() || "unidad",
+        quantity: Number(i?.quantity),
+      }))
+      .filter((i) => i.productName);
+    if (!items.length) throw Object.assign(new Error("Agrega al menos un producto."), { status: 400 });
+    const bad = items.find((i) => !Number.isFinite(i.quantity) || i.quantity < 0);
+    if (bad) throw Object.assign(new Error(`Cantidad inválida en "${bad.productName}".`), { status: 400 });
+    const existing: any = await models.initialInventories.findOne({ branch: branchMatch(data.branch), date: day });
+    if (existing) {
+      existing.items = items;
+      existing.note = data.note;
+      existing.updatedBy = data.user;
+      await existing.save();
+      return existing.toObject();
+    }
+    const created = await models.initialInventories.create({ branch: data.branch, date: day, items, note: data.note, createdBy: data.user });
+    return created.toObject();
+  }
+
+  /** Inventarios iniciales de un rango, indexados por `${branchKey}|${YYYY-MM-DD}|${producto}`. */
+  async initialInventoryIndex(from: Date, to: Date): Promise<Map<string, number>> {
+    const list: any[] = await models.initialInventories.find({ date: { $gte: from, $lte: to } }).lean();
+    const index = new Map<string, number>();
+    for (const inv of list) {
+      const key = `${String(inv.branch).trim().toLowerCase()}|${toDateStr(new Date(inv.date))}`;
+      for (const it of inv.items || []) index.set(`${key}|${it.productName}`, Number(it.quantity) || 0);
+    }
+    return index;
   }
 }

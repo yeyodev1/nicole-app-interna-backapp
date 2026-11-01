@@ -381,3 +381,50 @@ export async function settleOrder(req: Request, res: Response): Promise<void> {
     res.status(HttpStatusCode.InternalServerError).send({ message: "Failed to settle order.", error: error.message });
   }
 }
+/** Solo Operaciones y administración registran el inventario inicial. */
+const INITIAL_INVENTORY_ROLES = ["OPERATIONS_MANAGER", "SUPERADMIN", "ADMIN", "SALES_MANAGER", "RETAILMANAGER"];
+function canEditInitialInventory(req: Request): boolean {
+  const role = String((req as any).user?.role || "").toUpperCase();
+  return INITIAL_INVENTORY_ROLES.includes(role);
+}
+
+/** GET /api/pos/initial-inventory?branch=&date=YYYY-MM-DD */
+export async function getInitialInventory(req: Request, res: Response): Promise<void> {
+  try {
+    const branch = String(req.query.branch || "");
+    const date = String(req.query.date || "");
+    if (!branch || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      res.status(HttpStatusCode.BadRequest).send({ message: "branch y date (AAAA-MM-DD) son obligatorios." });
+      return;
+    }
+    res.status(HttpStatusCode.Ok).send(await posRestockService.getInitialInventory(branch, date));
+  } catch (error: any) {
+    console.error("Error leyendo inventario inicial:", error);
+    res.status(HttpStatusCode.InternalServerError).send({ message: "No se pudo leer el inventario inicial." });
+  }
+}
+
+/** PUT /api/pos/initial-inventory  Body: { branch, date, items: [{ productName, unit, quantity }], note? } */
+export async function saveInitialInventory(req: Request, res: Response): Promise<void> {
+  try {
+    if (!canEditInitialInventory(req)) {
+      res.status(HttpStatusCode.Forbidden).send({ message: "Solo Operaciones puede registrar el inventario inicial." });
+      return;
+    }
+    const { branch, date, items, note } = req.body || {};
+    if (!branch || !/^\d{4}-\d{2}-\d{2}$/.test(String(date || ""))) {
+      res.status(HttpStatusCode.BadRequest).send({ message: "branch y date (AAAA-MM-DD) son obligatorios." });
+      return;
+    }
+    const user = (req as any).user?.name || (req as any).user?.email || "Operaciones";
+    const saved = await posRestockService.saveInitialInventory({ branch, date, items, note, user });
+    res.status(HttpStatusCode.Ok).send({ message: "Inventario inicial guardado.", data: saved });
+  } catch (error: any) {
+    if (error?.status === 400) {
+      res.status(HttpStatusCode.BadRequest).send({ message: error.message });
+      return;
+    }
+    console.error("Error guardando inventario inicial:", error);
+    res.status(HttpStatusCode.InternalServerError).send({ message: "No se pudo guardar el inventario inicial." });
+  }
+}

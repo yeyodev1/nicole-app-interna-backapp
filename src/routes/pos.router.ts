@@ -14,6 +14,8 @@ import {
   getRestockLeftovers,
   deleteRestockObjective,
   settleOrder,
+  getInitialInventory,
+  saveInitialInventory,
 } from "../controllers/pos.controller";
 import { authMiddleware } from "../middlewares/auth.middleware";
 
@@ -44,6 +46,10 @@ router.get("/restock/operations-report", getOperationsReport);
 router.post("/restock/daily-entry", submitRestockDailyEntry);
 router.get("/restock/history", getRestockHistory);
 router.get("/restock/leftovers", getRestockLeftovers);
+
+// Inventario inicial por sucursal y día (Operaciones)
+router.get("/initial-inventory", getInitialInventory);
+router.put("/initial-inventory", saveInitialInventory);
 
 // Settle order in island
 router.put("/orders/:orderId/settle", settleOrder);

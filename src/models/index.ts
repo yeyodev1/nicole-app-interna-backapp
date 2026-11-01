@@ -20,9 +20,11 @@ import { SellerModel } from "./seller.model";
 import { InvoiceSequenceModel } from "./invoice-sequence.model";
 import { NotificationModel } from "./notification.model";
 import { McpUserModel } from "./mcp-user.model";
+import { InitialInventoryModel } from "./initial-inventory.model";
 
 export const models = {
   mcpUsers: McpUserModel,
+  initialInventories: InitialInventoryModel,
   orders: OrderModel,
   dailySummaries: DailySummaryModel,
   users: UserModel,
