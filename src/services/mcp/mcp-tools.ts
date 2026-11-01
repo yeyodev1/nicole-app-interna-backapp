@@ -3,6 +3,7 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { models } from "../../models";
 import { registerCrmTools } from "./mcp-crm-tools";
+import { registerContificoTools } from "./mcp-contifico-tools";
 
 /**
  * Herramientas de SOLO LECTURA del conector de Claude sobre los pedidos de Nicole y Sucrée
@@ -78,7 +79,9 @@ export function buildMcpServer(userEmail: string) {
         "Datos en vivo de la app interna de Nicole Pastry Arts y Sucrée (pedidos, ventas, entregas y facturación). " +
         `Solo lectura. Conectado como ${userEmail}. Fechas en hora de Ecuador (AAAA-MM-DD). ` +
         "Montos en dólares con IVA (total del pedido). marca: nicole | sucree | todas. " +
-        "Las herramientas crm_* leen el CRM (HighLevel) de Nicole: equipo, quién atiende y cómo, conversaciones, mensajes, contactos, embudo y citas.",
+        "Las herramientas crm_* leen el CRM (HighLevel) de Nicole: equipo, quién atiende y cómo, conversaciones, mensajes, contactos, embudo y citas. " +
+        "Las herramientas contifico_* consultan Contífico EN TIEMPO REAL (Nicole y Sucrée son empresas separadas): ventas facturadas por caja y vendedor, productos vendidos, documentos, catálogo, stock y clientes. " +
+        "Para cifras contables/facturadas usa contifico_*; para pedidos, entregas y producción usa las herramientas de la app interna.",
     }
   );
 
@@ -288,6 +291,7 @@ export function buildMcpServer(userEmail: string) {
   );
 
   registerCrmTools(server);
+  registerContificoTools(server);
 
   return server;
 }
