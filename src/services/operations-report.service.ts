@@ -259,36 +259,21 @@ export class OperationsReportService {
     for (const it of initialItems) getRow(it.productName).inicial = it.quantity;
 
     for (const [key, row] of byName) {
-      // Todo lo que diga venta resta del stock, igual que las bajas
-      if (sales.available) {
-        const v = row.ventas;
-        row.vendido = v.isla + v.combo + v.casaMia + v.delaCrem;
-      }
+      // Vendido = isla (Contífico; 0 si ese día aún no hay ventas) + combos + Casa Mía + Dela Cream.
+      const v = row.ventas;
+      row.vendido = (sales.available ? v.isla : 0) + v.combo + v.casaMia + v.delaCrem;
       // Los suministros no se venden en caja: sin cuenta de diferencia
       if (suministros.has(key)) {
         row.vendido = null;
         if (!row.categoria) row.categoria = "Suministro";
         continue;
       }
-      // Flujo del día: inicial + recibido - vendido - bajas = debería quedar
-      // (vendido = isla + combos + Casa Mía + Dela Crem).
-      // Diferencia = lo que contó el cierre - lo que debería quedar.
-      // Sin cierre del día anterior no hay inicial: lo recibido del día hace
-      // de stock inicial y la cuenta corre igual desde ahí.
-      if (row.vendido !== null) {
-        row.deberiaQuedar = (row.inicial ?? 0) + row.recibido - row.vendido - row.bajas;
-        if (row.quedo !== null) {
-          // Diferencia = el "debería quedar" ajustado con lo que quedó en isla,
-          // respetando su signo: lo que quedó siempre ACERCA la diferencia a
-          // cero, nunca la agranda.
-          //   debería -17, quedó 2 → -15 (faltan 15, las 2 de isla ya aparecen)
-          //   debería  10, quedó 2 →  +8 (sobran 8 que no se vendieron)
-          // Negativo = falta producto · Positivo = sobra.
-          row.descuadre = row.deberiaQuedar < 0
-            ? row.deberiaQuedar + row.quedo
-            : row.deberiaQuedar - row.quedo;
-        }
-      }
+      // Regla de Operaciones (31/10/2026):
+      //   Debería quedar = Empezó + Recibido − (isla + combos + Casa Mía + Dela Cream) − Bajas
+      //   Quedó (isla)   = lo que la sucursal cuenta en la reposición del día (cierre)
+      //   Diferencia     = Quedó − Debería quedar  (negativo = falta producto · positivo = sobra)
+      row.deberiaQuedar = (row.inicial ?? 0) + row.recibido - row.vendido - row.bajas;
+      if (row.quedo !== null) row.descuadre = row.quedo - row.deberiaQuedar;
     }
 
     const products = Array.from(byName.values()).sort((a, b) => {
