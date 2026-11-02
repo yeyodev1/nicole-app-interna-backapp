@@ -6,6 +6,7 @@ import { isPrecioIvaIncluido, CONTIFICO_DELIVERY_ID } from "../config/precio-fin
 import { CONTIFICO_CUENTA_BANCARIA_TRA } from "../config/contifico-cobro.config";
 import { normalizeString } from "../utils/string.utils";
 import { deliverySlotsFor } from "../services/delivery-capacity.service";
+import { isDiscarded, restoreFromDiscard } from "../utils/reserva";
 
 /**
  * Pedidos que llegan de la tienda online (nicole-tienda-backapp).
@@ -544,6 +545,11 @@ export async function updateWebOrderPayment(req: Request, res: Response, next: N
     const now = new Date();
     order.updatedBy = WEB_ORDER_CHANNEL;
 
+    // El cliente de una reserva descartada pagó o mandó comprobante: vuelve al seguimiento.
+    if (isDiscarded(order) && (paymentStatus === "PAID" || isProofUrl(paymentProofUrl))) {
+      restoreFromDiscard(order, WEB_ORDER_CHANNEL, "El cliente pagó o subió un comprobante en la tienda");
+    }
+
     if (hasProof) {
       const url = isProofUrl(paymentProofUrl) ? paymentProofUrl.trim() : undefined;
       if (url && url !== order.webOrder.paymentProofUrl) {
@@ -678,6 +684,7 @@ export async function getWebOrderStatuses(req: Request, res: Response, next: Nex
           "webOrder.paymentStatus": 1,
           "webOrder.paymentProofUrl": 1,
           "webOrder.proofRejected": 1,
+          "webOrder.discard.at": 1,
           status: 1,
           deliveryDate: 1,
           deliveryTime: 1,
@@ -694,14 +701,15 @@ export async function getWebOrderStatuses(req: Request, res: Response, next: Nex
       )
       .lean();
 
+    // Descartar es interno: la tienda lee VOID como cancelado y le avisaría al cliente.
     const results = orders.map((o) => ({
       externalId: o.webOrder?.externalId,
       ...(o.status ? { status: o.status } : {}),
-      ...(o.productionStage ? { productionStage: o.productionStage } : {}),
+      ...(o.productionStage && !o.webOrder?.discard?.at ? { productionStage: o.productionStage } : {}),
       ...(o.dispatchStatus ? { dispatchStatus: o.dispatchStatus } : {}),
       ...(o.webOrder?.paymentStatus ? { paymentStatus: o.webOrder.paymentStatus } : {}),
       // voidedAt con valor pero ilegible sigue contando como anulado.
-      ...(o.voidedAt ? { voidedAt: toIsoOrUndefined(o.voidedAt) ?? String(o.voidedAt) } : {}),
+      ...(o.voidedAt && !o.webOrder?.discard?.at ? { voidedAt: toIsoOrUndefined(o.voidedAt) ?? String(o.voidedAt) } : {}),
       deliveryType: o.deliveryType,
       ...(o.branch ? { branch: o.branch } : {}),
       // deliveryDate se guarda a la medianoche UTC del día de entrega: la parte de fecha del ISO es el día.
