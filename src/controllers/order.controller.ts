@@ -12,6 +12,7 @@ import { applyWebPayment, queueWebInvoice } from "./web-order.controller";
 import { applyClientLinkMode, clientLinkUrl, clientWhatsappMessage } from "../services/client-link.service";
 import { normalizeEcPhone, phoneSearchRegex } from "../utils/phone.utils";
 import { assertDeliverySlotAvailable, deliverySlotsFor, ymdOf } from "../services/delivery-capacity.service";
+import { NOT_DISCARDED, hasPayment, isDiscarded, isReservaOrder } from "../utils/reserva";
 
 const nicoleContificoService = new ContificoService('nicole');
 const sucreeContificoService = new ContificoService('sucree');
@@ -373,7 +374,8 @@ export async function getOrders(req: AuthRequest, res: Response, next: NextFunct
     }
     const currentRole = currentUser?.role?.toUpperCase();
 
-    const query: any = {};
+    // Las reservas descartadas solo se ven en el panel de reservas.
+    const query: any = { ...NOT_DISCARDED };
 
     // Pedidos de la tienda online por gestionar (status PENDIENTE_GESTION).
     const webPending = req.query.webPending === 'true';
@@ -891,6 +893,15 @@ export async function markWebOrderManaged(req: AuthRequest, res: Response, next:
       res.status(HttpStatusCode.Ok).send({ message: "El pedido ya estaba gestionado.", order });
       return;
     }
+    // En una reserva, gestionado significa que el cliente pagó: es lo único que cuenta como venta.
+    if (isDiscarded(order)) {
+      res.status(HttpStatusCode.Conflict).send({ message: "La reserva está descartada: recupérala primero." });
+      return;
+    }
+    if (isReservaOrder(order) && !hasPayment(order)) {
+      res.status(HttpStatusCode.Conflict).send({ message: "Registra el cobro antes de marcar la reserva como gestionada." });
+      return;
+    }
 
     const userName = req.user?.name || req.user?.email || "Usuario";
     const now = new Date();
@@ -1156,6 +1167,10 @@ export async function registerCollection(req: AuthRequest, res: Response, next: 
     const order = await models.orders.findById(id);
     if (!order) {
       res.status(HttpStatusCode.NotFound).send({ message: "Order not found." });
+      return;
+    }
+    if (isDiscarded(order)) {
+      res.status(HttpStatusCode.Conflict).send({ message: "La reserva está descartada: recupérala antes de cobrarla." });
       return;
     }
 
@@ -2211,6 +2226,10 @@ export async function settleOrderInIsland(req: AuthRequest, res: Response) {
       res.status(HttpStatusCode.NotFound).send({ message: "Order not found." });
       return;
     }
+    if (isDiscarded(order)) {
+      res.status(HttpStatusCode.Conflict).send({ message: "La reserva está descartada: recupérala antes de cobrarla." });
+      return;
+    }
 
     // 1. Update settlement fields
     order.settledInIsland = true;
@@ -2284,6 +2303,7 @@ export async function getDeliveryReport(req: AuthRequest, res: Response, next: N
     if (deliveryPersonId) {
       query["deliveryPerson.personId"] = deliveryPersonId;
     }
+    Object.assign(query, NOT_DISCARDED);
 
     const allOrders = await models.orders.find(query)
       .select("orderDate deliveryDate customerName deliveryValue deliveryPerson totalValue status products deliveryType")
