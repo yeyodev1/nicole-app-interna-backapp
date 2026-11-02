@@ -70,6 +70,8 @@ export interface IWebOrder {
   contactLog?: Array<{ at: Date; by: string; note?: string }>;
   /** Reservas: descarte lógico (no compró). Ver utils/reserva.ts. */
   discard?: { at: Date; by: string; reason?: string; note?: string; previousStage?: string };
+  /** Reservas: correos de recordatorio de la tienda; clickedAt = entró por el enlace del correo. */
+  reminder?: { sentCount?: number; lastSentAt?: Date; clickedAt?: Date };
 }
 
 /**
@@ -377,6 +379,10 @@ const OrderSchema = new Schema<IOrder>(
           { at: Date, by: String, reason: String, note: String, previousStage: String },
           { _id: false },
         ),
+        default: undefined,
+      },
+      reminder: {
+        type: new Schema({ sentCount: Number, lastSentAt: Date, clickedAt: Date }, { _id: false }),
         default: undefined,
       },
     },
