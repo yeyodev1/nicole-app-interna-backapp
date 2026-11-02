@@ -1,6 +1,7 @@
 import express from "express";
 import * as OrderController from "../controllers/order.controller";
 import * as ClientLinkController from "../controllers/client-link.controller";
+import * as ReservaController from "../controllers/reserva.controller";
 import { authMiddleware } from "../middlewares/auth.middleware";
 
 const router = express.Router();
@@ -18,6 +19,14 @@ router.get("/invoice-status", authMiddleware as any, OrderController.getInvoiceS
 router.get("/delivery-slots", authMiddleware as any, OrderController.getDeliverySlots);
 
 router.get("/reports/delivery", authMiddleware as any, OrderController.getDeliveryReport);
+
+// Panel de reservas sin pago (antes de /:id)
+router.get("/reservas", authMiddleware as any, ReservaController.listReservas);
+router.post("/reservas/discard", authMiddleware as any, ReservaController.discardReservas);
+router.post("/:id/reserva/contact", authMiddleware as any, ReservaController.markContacted);
+router.post("/:id/reserva/contact/undo", authMiddleware as any, ReservaController.undoContact);
+router.patch("/:id/reserva/contact/note", authMiddleware as any, ReservaController.setContactNote);
+router.post("/:id/reserva/restore", authMiddleware as any, ReservaController.restoreReserva);
 
 // GET /api/orders/:id
 router.get("/:id", authMiddleware as any, OrderController.getOrderById);
