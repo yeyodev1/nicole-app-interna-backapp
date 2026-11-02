@@ -116,19 +116,34 @@ export async function listReservas(req: AuthRequest, res: Response, next: NextFu
 
     // La más antigua primero mientras alguien espera respuesta; el historial, lo reciente primero.
     const direction = state === "pending" || state === "contacted" ? 1 : -1;
-    const [orders, ...counts] = await Promise.all([
+    const [orders, reminderRows, ...counts] = await Promise.all([
       models.orders
         .find({ ...STATE_QUERIES[state], ...scope })
         .select(LIST_FIELDS)
         .sort({ createdAt: direction })
         .limit(LIST_LIMIT)
         .lean(),
+      // Lo que rindió el correo de recordatorio: quiénes volvieron y cuánto terminó en venta.
+      models.orders.aggregate([
+        { $match: { ...IS_RESERVA, "webOrder.reminder.clickedAt": { $ne: null }, ...scope } },
+        {
+          $group: {
+            _id: null,
+            returned: { $sum: 1 },
+            recoveredTotal: { $sum: { $cond: [{ $eq: ["$status", STATUS_PENDING] }, 0, "$totalValue"] } },
+          },
+        },
+      ]),
       ...Object.values(STATE_QUERIES).map((query) => models.orders.countDocuments({ ...query, ...scope })),
     ]);
 
     res.status(HttpStatusCode.Ok).send({
       orders,
       counts: Object.fromEntries(Object.keys(STATE_QUERIES).map((key, i) => [key, counts[i]])),
+      reminders: {
+        returned: reminderRows[0]?.returned || 0,
+        recoveredTotal: reminderRows[0]?.recoveredTotal || 0,
+      },
       limit: LIST_LIMIT,
     });
   } catch (error) {
