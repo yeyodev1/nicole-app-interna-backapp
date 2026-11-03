@@ -3,16 +3,19 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 /** Registro sin inferencia de tipos: con ~20 herramientas, tsc se quedaba sin memoria en Vercel. zod valida igual en ejecución. */
 const reg = (server: unknown) => (server as any).registerTool.bind(server) as (name: string, config: any, cb: (args: any) => Promise<any>) => void;
-import { ec, hl, hlConfigured, locationId, pipelines, stageMap, teamMap, userIdByName } from "./highlevel.service";
+import { CRM_LABEL, configuredAccounts, ec, hl, locationId, pipelines, stageMap, teamMap, userIdByName, type CrmAccount } from "./highlevel.service";
 
 /**
- * Herramientas de SOLO LECTURA del CRM de Nicole (HighLevel): equipo, quién atiende y cómo
- * (conversaciones pendientes, mensajes), contactos, embudo de ventas y citas.
+ * Herramientas de SOLO LECTURA del CRM (HighLevel) de Nicole y Sucrée (subcuentas distintas,
+ * se elige con `marca`; por defecto Nicole): equipo, quién atiende y cómo (conversaciones
+ * pendientes, mensajes), contactos, embudo de ventas y citas.
  */
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true };
 const json = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] });
 const fail = (e: unknown) => ({ content: [{ type: "text" as const, text: `No pude leer el CRM: ${(e as Error).message}` }], isError: true });
 const hoursSince = (ms: unknown) => (ms ? Math.round(((Date.now() - Number(ms)) / 3600000) * 10) / 10 : null);
+
+const Marca = z.enum(["nicole", "sucree"]).default("nicole").describe("Subcuenta del CRM: nicole o sucree");
 
 const YMD = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Usa AAAA-MM-DD");
 const ecStart = (ymd: string) => Date.parse(`${ymd}T00:00:00-05:00`);
@@ -32,7 +35,7 @@ const TIME_BUDGET_MS = 45_000;
  * Conversaciones cuyo último mensaje cae entre `desde` y `hasta` (hora de Ecuador). El CRM
  * entrega de a 100, de la más reciente a la más vieja: se pagina hasta pasar `desde`.
  */
-async function conversationsInRange(opts: { desde: string; hasta: string; assignedTo?: string; query?: string }) {
+async function conversationsInRange(acc: CrmAccount, opts: { desde: string; hasta: string; assignedTo?: string; query?: string }) {
   const from = ecStart(opts.desde);
   const to = ecEnd(opts.hasta);
   const out: any[] = [];
@@ -41,11 +44,11 @@ async function conversationsInRange(opts: { desde: string; hasta: string; assign
   let complete = false;
   const started = Date.now();
   while (pages < MAX_PAGES && Date.now() - started < TIME_BUDGET_MS) {
-    const qs = new URLSearchParams({ locationId: locationId(), limit: "100", sort: "desc", sortBy: "last_message_date" });
+    const qs = new URLSearchParams({ locationId: locationId(acc), limit: "100", sort: "desc", sortBy: "last_message_date" });
     if (opts.assignedTo) qs.set("assignedTo", opts.assignedTo);
     if (opts.query) qs.set("query", opts.query);
     if (startAfterDate) qs.set("startAfterDate", startAfterDate);
-    const d = await hl<any>(`/conversations/search?${qs}`);
+    const d = await hl<any>(acc, `/conversations/search?${qs}`);
     const page: any[] = d.conversations || [];
     pages++;
     for (const c of page) {
@@ -63,14 +66,18 @@ async function conversationsInRange(opts: { desde: string; hasta: string; assign
 }
 
 export function registerCrmTools(server: McpServer) {
-  if (!hlConfigured()) return;
+  const accounts = configuredAccounts();
+  if (!accounts.length) return;
+  // Si una marca no tiene credenciales cargadas, se responde con un error claro.
+  const pick = (m?: string): CrmAccount => (m === "sucree" ? "sucree" : "nicole");
 
   reg(server)(
     "crm_equipo",
-    { title: "Equipo del CRM", description: "Personas del equipo de ventas/atención en el CRM (HighLevel) de Nicole.", inputSchema: {}, annotations: READ_ONLY },
-    async () => {
+    { title: "Equipo del CRM", description: "Personas del equipo de ventas/atención en el CRM (HighLevel) de Nicole o Sucrée.", inputSchema: { marca: Marca }, annotations: READ_ONLY },
+    async ({ marca }: any) => {
       try {
-        return json([...(await teamMap())].map(([id, nombre]) => ({ id, nombre })));
+        const acc = pick(marca);
+        return json({ marca: CRM_LABEL[acc], equipo: [...(await teamMap(acc))].map(([id, nombre]) => ({ id, nombre })) });
       } catch (e) {
         return fail(e);
       }
@@ -83,14 +90,15 @@ export function registerCrmTools(server: McpServer) {
       title: "Quién atiende y cómo",
       description:
         "Resume la atención por asesor en un rango de fechas (por defecto, los últimos 7 días): conversaciones con actividad, respondidas, sin responder (el último mensaje es del cliente), sin leer, la espera más larga y las que más tiempo llevan esperando. Recorre TODAS las conversaciones del rango, no solo las últimas 100.",
-      inputSchema: { desde: YMD.optional(), hasta: YMD.optional(), asesor: z.string().optional() },
+      inputSchema: { marca: Marca, desde: YMD.optional(), hasta: YMD.optional(), asesor: z.string().optional() },
       annotations: READ_ONLY,
     },
-    async ({ desde, hasta, asesor }: any) => {
+    async ({ marca, desde, hasta, asesor }: any) => {
       try {
-        const team = await teamMap();
+        const acc = pick(marca);
+        const team = await teamMap(acc);
         const range = { desde: desde || daysAgoEc(6), hasta: hasta || todayEc() };
-        const { conversations: convs, complete, pages } = await conversationsInRange({ ...range, assignedTo: await userIdByName(asesor) });
+        const { conversations: convs, complete, pages } = await conversationsInRange(acc, { ...range, assignedTo: await userIdByName(acc, asesor) });
         const by: Record<string, any> = {};
         const pendientes: any[] = [];
         for (const c of convs) {
@@ -107,6 +115,7 @@ export function registerCrmTools(server: McpServer) {
         }
         pendientes.sort((a, b) => (b.horas_esperando || 0) - (a.horas_esperando || 0));
         return json({
+          marca: CRM_LABEL[acc],
           rango: range,
           conversaciones_en_rango: convs.length,
           revision_completa: complete,
@@ -127,6 +136,7 @@ export function registerCrmTools(server: McpServer) {
       description:
         "Lista conversaciones con actividad en un rango de fechas (por defecto, hoy), de un asesor, solo las pendientes de responder o buscando por nombre/teléfono. Recorre todas las del rango (no solo las últimas 100).",
       inputSchema: {
+        marca: Marca,
         desde: YMD.optional(),
         hasta: YMD.optional(),
         asesor: z.string().optional(),
@@ -136,14 +146,16 @@ export function registerCrmTools(server: McpServer) {
       },
       annotations: READ_ONLY,
     },
-    async ({ desde, hasta, asesor, solo_sin_responder, texto, limite }: any) => {
+    async ({ marca, desde, hasta, asesor, solo_sin_responder, texto, limite }: any) => {
       try {
-        const team = await teamMap();
+        const acc = pick(marca);
+        const team = await teamMap(acc);
         const range = { desde: desde || todayEc(), hasta: hasta || todayEc() };
-        const { conversations, complete } = await conversationsInRange({ ...range, assignedTo: await userIdByName(asesor), query: texto });
+        const { conversations, complete } = await conversationsInRange(acc, { ...range, assignedTo: await userIdByName(acc, asesor), query: texto });
         let convs = conversations;
         if (solo_sin_responder) convs = convs.filter((c: any) => c.lastMessageDirection === "inbound");
         return json({
+          marca: CRM_LABEL[acc],
           rango: range,
           total: convs.length,
           revision_completa: complete,
@@ -171,19 +183,20 @@ export function registerCrmTools(server: McpServer) {
     "crm_mensajes",
     {
       title: "Mensajes de una conversación",
-      description: "Lee los mensajes de una conversación (para ver cómo atendió el asesor: tiempos, tono, si cerró la venta). Usa el conversacion_id de crm_conversaciones o crm_atencion.",
-      inputSchema: { conversacion_id: z.string().min(5), limite: z.number().int().min(1).max(300).default(60) },
+      description: "Lee los mensajes de una conversación (para ver cómo atendió el asesor: tiempos, tono, si cerró la venta). Usa el conversacion_id de crm_conversaciones o crm_atencion (y la misma marca).",
+      inputSchema: { marca: Marca, conversacion_id: z.string().min(5), limite: z.number().int().min(1).max(300).default(60) },
       annotations: READ_ONLY,
     },
-    async ({ conversacion_id, limite }: any) => {
+    async ({ marca, conversacion_id, limite }: any) => {
       try {
-        const team = await teamMap();
+        const acc = pick(marca);
+        const team = await teamMap(acc);
         const msgs: any[] = [];
         let lastMessageId: string | undefined;
         while (msgs.length < limite) {
           const qs = new URLSearchParams({ limit: String(Math.min(100, limite - msgs.length)) });
           if (lastMessageId) qs.set("lastMessageId", lastMessageId);
-          const d = await hl<any>(`/conversations/${encodeURIComponent(conversacion_id)}/messages?${qs}`);
+          const d = await hl<any>(acc, `/conversations/${encodeURIComponent(conversacion_id)}/messages?${qs}`);
           const page: any[] = d.messages?.messages || d.messages || [];
           msgs.push(...page);
           if (!d.messages?.nextPage || !page.length) break;
@@ -211,14 +224,16 @@ export function registerCrmTools(server: McpServer) {
     {
       title: "Buscar contactos",
       description: "Busca contactos del CRM por nombre, teléfono o correo.",
-      inputSchema: { texto: z.string().min(2), limite: z.number().int().min(1).max(50).default(10) },
+      inputSchema: { marca: Marca, texto: z.string().min(2), limite: z.number().int().min(1).max(50).default(10) },
       annotations: READ_ONLY,
     },
-    async ({ texto, limite }: any) => {
+    async ({ marca, texto, limite }: any) => {
       try {
-        const team = await teamMap();
-        const d = await hl<any>("/contacts/search", { method: "POST", body: { locationId: locationId(), pageLimit: limite, query: texto } });
+        const acc = pick(marca);
+        const team = await teamMap(acc);
+        const d = await hl<any>(acc, "/contacts/search", { method: "POST", body: { locationId: locationId(acc), pageLimit: limite, query: texto } });
         return json({
+          marca: CRM_LABEL[acc],
           total: d.total,
           contactos: (d.contacts || []).map((c: any) => ({
             contacto_id: c.id,
@@ -239,12 +254,14 @@ export function registerCrmTools(server: McpServer) {
 
   reg(server)(
     "crm_ver_contacto",
-    { title: "Ver contacto", description: "Ficha completa de un contacto del CRM.", inputSchema: { contacto_id: z.string().min(5) }, annotations: READ_ONLY },
-    async ({ contacto_id }: any) => {
+    { title: "Ver contacto", description: "Ficha completa de un contacto del CRM.", inputSchema: { marca: Marca, contacto_id: z.string().min(5) }, annotations: READ_ONLY },
+    async ({ marca, contacto_id }: any) => {
       try {
-        const team = await teamMap();
-        const { contact: c } = await hl<any>(`/contacts/${encodeURIComponent(contacto_id)}`);
+        const acc = pick(marca);
+        const team = await teamMap(acc);
+        const { contact: c } = await hl<any>(acc, `/contacts/${encodeURIComponent(contacto_id)}`);
         return json({
+          marca: CRM_LABEL[acc],
           contacto_id: c.id,
           nombre: c.contactName || [c.firstName, c.lastName].filter(Boolean).join(" "),
           telefono: c.phone,
@@ -267,26 +284,27 @@ export function registerCrmTools(server: McpServer) {
     {
       title: "Embudo de ventas",
       description: "Cuántas oportunidades hay en cada etapa del embudo del CRM (Nuevo lead, Interesado, Pagado, Entregado, Venta perdida…), opcionalmente de un asesor.",
-      inputSchema: { asesor: z.string().optional(), desde: YMD.optional().describe("Creadas desde"), hasta: YMD.optional() },
+      inputSchema: { marca: Marca, asesor: z.string().optional(), desde: YMD.optional().describe("Creadas desde"), hasta: YMD.optional() },
       annotations: READ_ONLY,
     },
-    async ({ asesor, desde, hasta }: any) => {
+    async ({ marca, asesor, desde, hasta }: any) => {
       try {
-        const uid = await userIdByName(asesor);
+        const acc = pick(marca);
+        const uid = await userIdByName(acc, asesor);
         const result: any[] = [];
-        for (const p of await pipelines()) {
+        for (const p of await pipelines(acc)) {
           for (const s of p.stages || []) {
-            const qs = new URLSearchParams({ location_id: locationId(), pipeline_id: p.id, pipeline_stage_id: s.id, limit: "1" });
+            const qs = new URLSearchParams({ location_id: locationId(acc), pipeline_id: p.id, pipeline_stage_id: s.id, limit: "1" });
             if (uid) qs.set("assigned_to", uid);
             if (desde || hasta) {
               qs.set("date", mdy(desde || "2020-01-01"));
               qs.set("endDate", mdy(hasta || todayEc()));
             }
-            const d = await hl<any>(`/opportunities/search?${qs}`);
+            const d = await hl<any>(acc, `/opportunities/search?${qs}`);
             result.push({ embudo: p.name, etapa: s.name, oportunidades: d.meta?.total ?? 0 });
           }
         }
-        return json({ asesor: asesor || "todos", creadas: desde || hasta ? { desde: desde || "inicio", hasta: hasta || todayEc() } : "todas", etapas: result });
+        return json({ marca: CRM_LABEL[acc], asesor: asesor || "todos", creadas: desde || hasta ? { desde: desde || "inicio", hasta: hasta || todayEc() } : "todas", etapas: result });
       } catch (e) {
         return fail(e);
       }
@@ -299,6 +317,7 @@ export function registerCrmTools(server: McpServer) {
       title: "Oportunidades",
       description: "Lista oportunidades del CRM por etapa, estado (open/won/lost/abandoned), asesor o texto.",
       inputSchema: {
+        marca: Marca,
         etapa: z.string().optional().describe("Nombre de la etapa, p. ej. 'Interesado'"),
         estado: z.enum(["open", "won", "lost", "abandoned", "all"]).default("all"),
         asesor: z.string().optional(),
@@ -309,16 +328,17 @@ export function registerCrmTools(server: McpServer) {
       },
       annotations: READ_ONLY,
     },
-    async ({ etapa, estado, asesor, texto, desde, hasta, limite }: any) => {
+    async ({ marca, etapa, estado, asesor, texto, desde, hasta, limite }: any) => {
       try {
-        const [team, stages] = await Promise.all([teamMap(), stageMap()]);
-        const qs = new URLSearchParams({ location_id: locationId(), limit: "100" });
+        const acc = pick(marca);
+        const [team, stages] = await Promise.all([teamMap(acc), stageMap(acc)]);
+        const qs = new URLSearchParams({ location_id: locationId(acc), limit: "100" });
         if (desde || hasta) {
           qs.set("date", mdy(desde || "2020-01-01"));
           qs.set("endDate", mdy(hasta || todayEc()));
         }
         if (estado !== "all") qs.set("status", estado);
-        const uid = await userIdByName(asesor);
+        const uid = await userIdByName(acc, asesor);
         if (uid) qs.set("assigned_to", uid);
         if (texto) qs.set("q", texto);
         if (etapa) {
@@ -331,12 +351,13 @@ export function registerCrmTools(server: McpServer) {
         let total = 0;
         for (let page = 1; all.length < limite && page <= 10; page++) {
           qs.set("page", String(page));
-          const d = await hl<any>(`/opportunities/search?${qs}`);
+          const d = await hl<any>(acc, `/opportunities/search?${qs}`);
           total = d.meta?.total ?? total;
           all.push(...(d.opportunities || []));
           if (!d.meta?.nextPage) break;
         }
         return json({
+          marca: CRM_LABEL[acc],
           total,
           oportunidades: all.slice(0, limite).map((o: any) => ({
             oportunidad_id: o.id,
@@ -363,24 +384,25 @@ export function registerCrmTools(server: McpServer) {
     {
       title: "Citas del CRM",
       description: "Citas agendadas en los calendarios del CRM entre dos fechas (AAAA-MM-DD).",
-      inputSchema: { desde: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), hasta: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) },
+      inputSchema: { marca: Marca, desde: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), hasta: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) },
       annotations: READ_ONLY,
     },
-    async ({ desde, hasta }: any) => {
+    async ({ marca, desde, hasta }: any) => {
       try {
-        const team = await teamMap();
+        const acc = pick(marca);
+        const team = await teamMap(acc);
         const start = Date.parse(`${desde}T00:00:00-05:00`);
         const end = Date.parse(`${hasta}T23:59:59-05:00`);
-        const cals = (await hl<any>(`/calendars/?locationId=${locationId()}`)).calendars || [];
+        const cals = (await hl<any>(acc, `/calendars/?locationId=${locationId(acc)}`)).calendars || [];
         const events: any[] = [];
         for (const cal of cals) {
-          const d = await hl<any>(`/calendars/events?locationId=${locationId()}&calendarId=${cal.id}&startTime=${start}&endTime=${end}`);
+          const d = await hl<any>(acc, `/calendars/events?locationId=${locationId(acc)}&calendarId=${cal.id}&startTime=${start}&endTime=${end}`);
           for (const e of d.events || []) {
             events.push({ calendario: cal.name, titulo: e.title, inicio: ec(e.startTime), fin: ec(e.endTime), estado: e.appointmentStatus, asesor: team.get(e.assignedUserId) || null, contacto_id: e.contactId });
           }
         }
         events.sort((a, b) => String(a.inicio).localeCompare(String(b.inicio)));
-        return json({ desde, hasta, citas: events });
+        return json({ marca: CRM_LABEL[acc], desde, hasta, citas: events });
       } catch (e) {
         return fail(e);
       }
