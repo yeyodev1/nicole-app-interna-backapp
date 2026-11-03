@@ -35,4 +35,7 @@ router.post("/", WebOrderController.createWebOrder);
 // PATCH /api/web-orders/:externalId/payment
 router.patch("/:externalId/payment", WebOrderController.updateWebOrderPayment);
 
+// PATCH /api/web-orders/:externalId/reminder (recordatorios por correo de una reserva)
+router.patch("/:externalId/reminder", WebOrderController.updateWebOrderReminder);
+
 export default router;

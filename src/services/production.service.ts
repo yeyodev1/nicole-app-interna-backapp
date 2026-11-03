@@ -1,6 +1,7 @@
 
 import { OrderModel } from "../models/order.model";
 import { getECDateRange, getEcuadorNow } from "../utils/date.utils";
+import { NOT_DISCARDED } from "../utils/reserva";
 
 export class ProductionService {
   /**
@@ -65,6 +66,9 @@ export class ProductionService {
     if (source) {
       matchQuery.contificoSource = source;
     }
+
+    // Sin esto la reserva descartada saldría en "Anulados" con el botón de restaurar de producción.
+    Object.assign(matchQuery, NOT_DISCARDED);
 
     const orders = await OrderModel.find(matchQuery).sort({ deliveryDate: 1 });
 
@@ -735,7 +739,7 @@ export class ProductionService {
       };
     }
 
-    const orders = await OrderModel.find(query).lean();
+    const orders = await OrderModel.find({ ...query, ...NOT_DISCARDED }).lean();
 
     // Aggregations
     const totalOrders = orders.length;
@@ -900,7 +904,7 @@ export class ProductionService {
     }
 
     // 1. Get Candidate Orders sorted by Date (FIFO)
-    const orders = await OrderModel.find(query).sort({ deliveryDate: 1 });
+    const orders = await OrderModel.find({ ...query, ...NOT_DISCARDED }).sort({ deliveryDate: 1 });
 
     // 2. Process each reported item type
     for (const item of items) {
@@ -1020,6 +1024,7 @@ export class ProductionService {
   async restoreOrder(orderId: string) {
     const order = await OrderModel.findById(orderId);
     if (!order) throw new Error("Order not found");
+    if (order.webOrder?.discard?.at) throw new Error("Reserva descartada: se recupera desde el panel de reservas.");
 
     // 1-Hour Constraint Check
     if (order.productionStage === 'VOID' && order.voidedAt) {
