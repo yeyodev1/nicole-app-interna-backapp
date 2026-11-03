@@ -82,7 +82,7 @@ export function buildMcpServer(userEmail: string) {
         "Datos en vivo de la app interna de Nicole Pastry Arts y Sucrée (pedidos, ventas, entregas y facturación). " +
         `Solo lectura. Conectado como ${userEmail}. Fechas en hora de Ecuador (AAAA-MM-DD). ` +
         "Montos en dólares con IVA (total del pedido). marca: nicole | sucree | todas. " +
-        "Las herramientas crm_* leen el CRM (HighLevel) de Nicole: equipo, quién atiende y cómo, conversaciones, mensajes, contactos, embudo y citas. " +
+        "Las herramientas crm_* leen el CRM (HighLevel) de Nicole y de Sucrée (subcuentas distintas; parámetro marca: nicole | sucree, por defecto nicole; para comparar, consulta cada una): equipo, quién atiende y cómo, conversaciones, mensajes, contactos, embudo y citas. " +
         "Las herramientas contifico_* consultan Contífico EN TIEMPO REAL (Nicole y Sucrée son empresas separadas): ventas facturadas por caja y vendedor, productos vendidos, documentos, catálogo, stock y clientes. " +
         "Para cifras contables/facturadas usa contifico_*; para pedidos, entregas y producción usa las herramientas de la app interna.",
     }

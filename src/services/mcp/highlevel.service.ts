@@ -1,19 +1,35 @@
 /**
- * Lectura del CRM (HighLevel / LeadConnector) de Nicole para el conector MCP.
- * Credenciales solo por entorno (el repo es público): HIGHLEVEL_PIT (token de integración
- * privada) y HIGHLEVEL_LOCATION_ID (subcuenta). Solo GET/búsquedas: nada se escribe.
+ * Lectura del CRM (HighLevel / LeadConnector) de Nicole y Sucrée para el conector MCP.
+ * Cada marca es una subcuenta distinta con su propio token. Credenciales solo por entorno
+ * (el repo es público):
+ *   - Nicole: HIGHLEVEL_PIT + HIGHLEVEL_LOCATION_ID
+ *   - Sucrée: HIGHLEVEL_SUCREE_PIT + HIGHLEVEL_SUCREE_LOCATION_ID
+ * Solo GET/búsquedas: nada se escribe.
  */
 const BASE = "https://services.leadconnectorhq.com";
 
-export const hlConfigured = () => !!(process.env.HIGHLEVEL_PIT && process.env.HIGHLEVEL_LOCATION_ID);
-export const locationId = () => String(process.env.HIGHLEVEL_LOCATION_ID || "");
+export type CrmAccount = "nicole" | "sucree";
+export const CRM_LABEL: Record<CrmAccount, string> = { nicole: "Nicole", sucree: "Sucrée" };
 
-export async function hl<T = any>(path: string, init: { method?: "GET" | "POST"; body?: unknown } = {}): Promise<T> {
-  if (!hlConfigured()) throw new Error("El CRM no está configurado (faltan HIGHLEVEL_PIT / HIGHLEVEL_LOCATION_ID).");
+const creds = (acc: CrmAccount) =>
+  acc === "sucree"
+    ? { pit: process.env.HIGHLEVEL_SUCREE_PIT, location: process.env.HIGHLEVEL_SUCREE_LOCATION_ID }
+    : { pit: process.env.HIGHLEVEL_PIT, location: process.env.HIGHLEVEL_LOCATION_ID };
+
+export const hlConfigured = (acc: CrmAccount = "nicole") => {
+  const c = creds(acc);
+  return !!(c.pit && c.location);
+};
+/** Cuentas con credenciales cargadas. */
+export const configuredAccounts = (): CrmAccount[] => (["nicole", "sucree"] as CrmAccount[]).filter((a) => hlConfigured(a));
+export const locationId = (acc: CrmAccount = "nicole") => String(creds(acc).location || "");
+
+export async function hl<T = any>(acc: CrmAccount, path: string, init: { method?: "GET" | "POST"; body?: unknown } = {}): Promise<T> {
+  if (!hlConfigured(acc)) throw new Error(`El CRM de ${CRM_LABEL[acc]} no está configurado.`);
   const res = await fetch(`${BASE}${path}`, {
     method: init.method || "GET",
     headers: {
-      Authorization: `Bearer ${process.env.HIGHLEVEL_PIT}`,
+      Authorization: `Bearer ${creds(acc).pit}`,
       Version: "2021-07-28",
       Accept: "application/json",
       ...(init.body ? { "Content-Type": "application/json" } : {}),
@@ -22,40 +38,43 @@ export async function hl<T = any>(path: string, init: { method?: "GET" | "POST";
     signal: AbortSignal.timeout(20000),
   });
   const data: any = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(`CRM ${res.status}: ${data?.message || "error"}`);
+  if (!res.ok) throw new Error(`CRM ${CRM_LABEL[acc]} ${res.status}: ${data?.message || "error"}`);
   return data as T;
 }
 
-// Equipo y etapas cambian poco: caché de 10 minutos por instancia.
-let usersCache: { at: number; map: Map<string, string> } | null = null;
-export async function teamMap(): Promise<Map<string, string>> {
-  if (usersCache && Date.now() - usersCache.at < 600_000) return usersCache.map;
-  const d = await hl<any>(`/users/?locationId=${locationId()}`);
+// Equipo y etapas cambian poco: caché de 10 minutos por instancia y por cuenta.
+const usersCache: Partial<Record<CrmAccount, { at: number; map: Map<string, string> }>> = {};
+export async function teamMap(acc: CrmAccount): Promise<Map<string, string>> {
+  const c = usersCache[acc];
+  if (c && Date.now() - c.at < 600_000) return c.map;
+  const d = await hl<any>(acc, `/users/?locationId=${locationId(acc)}`);
   const map = new Map<string, string>((d.users || []).map((u: any) => [u.id, u.name || `${u.firstName || ""} ${u.lastName || ""}`.trim()]));
-  usersCache = { at: Date.now(), map };
+  usersCache[acc] = { at: Date.now(), map };
   return map;
 }
 
-let pipeCache: { at: number; pipelines: any[] } | null = null;
-export async function pipelines(): Promise<any[]> {
-  if (pipeCache && Date.now() - pipeCache.at < 600_000) return pipeCache.pipelines;
-  const d = await hl<any>(`/opportunities/pipelines?locationId=${locationId()}`);
-  pipeCache = { at: Date.now(), pipelines: d.pipelines || [] };
-  return pipeCache.pipelines;
+const pipeCache: Partial<Record<CrmAccount, { at: number; pipelines: any[] }>> = {};
+export async function pipelines(acc: CrmAccount): Promise<any[]> {
+  const c = pipeCache[acc];
+  if (c && Date.now() - c.at < 600_000) return c.pipelines;
+  const d = await hl<any>(acc, `/opportunities/pipelines?locationId=${locationId(acc)}`);
+  pipeCache[acc] = { at: Date.now(), pipelines: d.pipelines || [] };
+  return pipeCache[acc]!.pipelines;
 }
 
-export async function stageMap(): Promise<Map<string, string>> {
+export async function stageMap(acc: CrmAccount): Promise<Map<string, string>> {
   const map = new Map<string, string>();
-  for (const p of await pipelines()) for (const s of p.stages || []) map.set(s.id, `${s.name}${(await pipelines()).length > 1 ? ` (${p.name})` : ""}`);
+  const list = await pipelines(acc);
+  for (const p of list) for (const s of p.stages || []) map.set(s.id, `${s.name}${list.length > 1 ? ` (${p.name})` : ""}`);
   return map;
 }
 
 /** Busca el id de una persona del equipo por nombre (sin tildes ni mayúsculas). */
-export async function userIdByName(name?: string): Promise<string | undefined> {
+export async function userIdByName(acc: CrmAccount, name?: string): Promise<string | undefined> {
   if (!name) return undefined;
   const norm = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
   const needle = norm(name);
-  for (const [id, n] of await teamMap()) if (norm(n).includes(needle)) return id;
+  for (const [id, n] of await teamMap(acc)) if (norm(n).includes(needle)) return id;
   return undefined;
 }
 

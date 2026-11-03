@@ -83,6 +83,8 @@ Optional, integración con la tienda online: `WEB_ORDERS_API_KEY=` (clave compar
 
 Venta con link (v8): `TIENDA_PUBLIC_URL` (default `https://nicolepastry.com.ec`, base del link del cliente), `FRONTEND_URL` (link "Ver pedido" en los correos), `PAYPHONE_TOKEN` y `PAYPHONE_STORE_ID` (links de pago; sin ellos `/api/payphone/links` da 503), `CRON_SECRET` (obligatorio para el cron de links).
 
+Conector MCP, CRM (HighLevel), solo lectura: `HIGHLEVEL_PIT` + `HIGHLEVEL_LOCATION_ID` (subcuenta de Nicole) y `HIGHLEVEL_SUCREE_PIT` + `HIGHLEVEL_SUCREE_LOCATION_ID` (subcuenta de Sucrée). Las herramientas `crm_*` reciben `marca: nicole | sucree` (default nicole); una marca sin credenciales responde error y no se registra nada si faltan las dos.
+
 Optional, punto de emisión de facturas (`src/config/contifico-emision.config.ts`):
 `CONTIFICO_ESTABLECIMIENTO` (default `001`), `CONTIFICO_PUNTO_EMISION` (default `001` = Matriz / CDP),
 `CONTIFICO_SECUENCIAL_MINIMO` (piso opcional del contador, default 0), `CONTIFICO_SECUENCIALES_EXCLUIDOS` (default `1000001-1000010`: rango que se salta y se ignora al leer Contífico).
