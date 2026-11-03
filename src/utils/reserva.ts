@@ -49,3 +49,21 @@ export function restoreFromDiscard(order: any, user: string, details: string): v
   order.markModified("webOrder");
   order.auditLog.push({ user, action: "Reserva recuperada", at: new Date(), details });
 }
+
+/**
+ * Reportes de ventas (Ventas & Comisiones y dashboard general): solo cuenta lo que tiene un
+ * cobro registrado (un abono basta; también el cobro en isla o la tienda pagada), y nunca un
+ * pedido anulado ni una reserva descartada. Va en `$and` para no chocar con otros `$or`.
+ */
+export const COUNTS_AS_SALE = {
+  $and: [
+    { voidedAt: null, productionStage: { $ne: "VOID" }, "webOrder.discard.at": null },
+    {
+      $or: [
+        { "payments.0": { $exists: true } },
+        { "webOrder.paymentStatus": "PAID" },
+        { settledInIsland: true },
+      ],
+    },
+  ],
+};
