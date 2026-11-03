@@ -8,6 +8,7 @@ import { getBranchPuntoCodes } from "../config/contifico-pos.config";
 import { normalizeString } from "../utils/string.utils";
 import { buildContificoCategoryMaps } from "../utils/contifico-categorias.util";
 import { receptionDayOf, receptionCandidatesQuery } from "../utils/reception-day.util";
+import { NOT_DISCARDED } from "../utils/reserva";
 
 // Day-of-week index (getUTCDay) → objectives key
 const DOW_KEYS: (keyof WeeklyObjectives)[] = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
@@ -377,6 +378,7 @@ export class POSRestockService {
         branch: branchMatch(branch),
         deliveryDate: { $gte: targetDate },
         status: { $nin: ["DELIVERED"] },
+        ...NOT_DISCARDED,
       })
       .select("deliveryDate products")
       .lean();

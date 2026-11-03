@@ -4,6 +4,7 @@ import { models } from "../models";
 import MetaAdsService from "../services/meta-ads.service";
 import { ContificoService } from "../services/contifico.service";
 import { getECDateRange } from "../utils/date.utils";
+import { NOT_UNCONFIRMED_RESERVA } from "../utils/reserva";
 
 const contificoService = new ContificoService();
 
@@ -260,7 +261,8 @@ export async function getSalesByResponsible(req: AuthRequest, res: Response, nex
 
     const orderMatch: any = {
       createdAt: { $gte: startDate, $lte: endDate },
-      invoiceStatus: { $ne: "VOID" }
+      invoiceStatus: { $ne: "VOID" },
+      ...NOT_UNCONFIRMED_RESERVA
     };
 
     if (source === 'nicole' || source === 'sucree') {
@@ -414,7 +416,8 @@ export async function getSuperAdminAnalytics(req: Request, res: Response, next: 
 
     // Base match stage
     const baseMatch: any = {
-      invoiceStatus: { $ne: "VOID" }
+      invoiceStatus: { $ne: "VOID" },
+      ...NOT_UNCONFIRMED_RESERVA
     };
     if (source && (source === 'nicole' || source === 'sucree')) {
       baseMatch.contificoSource = source;
