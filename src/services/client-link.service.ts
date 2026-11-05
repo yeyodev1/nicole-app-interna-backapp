@@ -357,10 +357,15 @@ export async function completeClientLink(token: string, body: any) {
   // Factura: solo si todavía no se emitió (p. ej. Consumidor Final por plazo vencido).
   const alreadyInvoiced = order.invoiceStatus === "PROCESSED";
   const invoice = alreadyInvoiced ? null : parseInvoice(body.invoice, recipientPhone);
+  // Venta del mismo día liquidada en la isla: la factura la emite el punto de venta.
+  // Se guardan los datos (para la cajera) pero el sistema no la emite.
+  const posInvoices = !!invoice && order.settledInIsland === true && date === todayInGuayaquil();
   if (invoice) {
     order.invoiceData = invoice;
-    order.invoiceNeeded = true;
-    order.invoiceStatus = "PENDING";
+    if (!posInvoices) {
+      order.invoiceNeeded = true;
+      order.invoiceStatus = "PENDING";
+    }
     link.invoiceDeadlineHandled = "CLIENT_DATA";
   }
 
@@ -372,14 +377,14 @@ export async function completeClientLink(token: string, body: any) {
     user: "Cliente (link)",
     action: "Entrega gestionada por el cliente",
     at: new Date(),
-    details: `${order.deliveryType === "delivery" ? "Delivery" : `Retiro en ${order.branch}`} · ${date} ${time}${invoice ? ` · Factura a ${invoice.businessName}` : ""}`,
+    details: `${order.deliveryType === "delivery" ? "Delivery" : `Retiro en ${order.branch}`} · ${date} ${time}${invoice ? ` · Factura a ${invoice.businessName}${posInvoices ? " (la emite el punto de venta)" : ""}` : ""}`,
   });
   order.updatedBy = "Cliente (link)";
   await order.save();
 
   // Factura y avisos después de guardar: si fallan, la entrega ya quedó registrada.
   let invoiceResult: { ok: boolean; error?: string } | null = null;
-  if (invoice) {
+  if (invoice && !posInvoices) {
     invoiceResult = await issueInvoiceNow(String(order._id));
   } else if (!alreadyInvoiced && !order.invoiceInfo?.id) {
     invoiceResult = await resolveNoInvoiceData(order);
@@ -387,11 +392,11 @@ export async function completeClientLink(token: string, body: any) {
 
   const when = `${date.split("-").reverse().join("/")} ${time}`;
   const where = order.deliveryType === "delivery" ? `delivery a ${link.deliveryAddressRaw}` : `retiro en ${order.branch}`;
-  await sendClientConfirmation(order, { when, invoice: !!invoice });
+  await sendClientConfirmation(order, { when, invoice: !!invoice && !posInvoices });
   await notifyAdvisor(order, {
     type: "CLIENT_LINK_COMPLETED",
     title: `${buyer.name || recipientName} completó su pedido`,
-    message: `${where} · ${when}${invoice ? ` · factura a ${invoice.businessName}` : ""}`,
+    message: `${where} · ${when}${invoice ? ` · factura a ${invoice.businessName}${posInvoices ? " (emitirla en el punto de venta)" : ""}` : ""}`,
     email: true,
   });
   if (invoiceResult && !invoiceResult.ok && invoiceResult.error) {
