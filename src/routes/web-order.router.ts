@@ -35,6 +35,9 @@ router.post("/", WebOrderController.createWebOrder);
 // PATCH /api/web-orders/:externalId/payment
 router.patch("/:externalId/payment", WebOrderController.updateWebOrderPayment);
 
+// PATCH /api/web-orders/:externalId/contifico-links (la tienda configuró el código de un producto)
+router.patch("/:externalId/contifico-links", WebOrderController.linkWebOrderContifico);
+
 // PATCH /api/web-orders/:externalId/reminder (recordatorios por correo de una reserva)
 router.patch("/:externalId/reminder", WebOrderController.updateWebOrderReminder);
 

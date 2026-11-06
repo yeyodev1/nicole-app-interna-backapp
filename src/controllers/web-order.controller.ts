@@ -697,6 +697,8 @@ export async function getWebOrderStatuses(req: Request, res: Response, next: Nex
           deliveryType: 1,
           branch: 1,
           updatedAt: 1,
+          "products.name": 1,
+          "products.contifico_id": 1,
         },
       )
       .lean();
@@ -726,6 +728,10 @@ export async function getWebOrderStatuses(req: Request, res: Response, next: Nex
       ) / 100,
       updatedAt: toIsoOrUndefined(o.updatedAt),
       ...(o.webOrder?.paymentProofUrl ? { paymentProofUrl: o.webOrder.paymentProofUrl } : {}),
+      // Ítems vinculados en la app interna: la tienda completa su catálogo si le falta el código.
+      contificoLinks: (o.products || [])
+        .filter((p: any) => p?.name && String(p?.contifico_id ?? "").trim())
+        .map((p: any) => ({ name: p.name, contifico_id: p.contifico_id })),
       // Comprobante rechazado en la app interna: la tienda borra el suyo y le pide otro al cliente.
       ...(o.webOrder?.proofRejected?.at
         ? {
@@ -742,6 +748,68 @@ export async function getWebOrderStatuses(req: Request, res: Response, next: Nex
   } catch (error) {
     console.error("❌ [web-orders] Error leyendo estados:", error);
     res.status(HttpStatusCode.InternalServerError).send({ message: "Error interno al leer los estados de pedidos web." });
+    return;
+  }
+}
+
+/**
+ * PATCH /api/web-orders/:externalId/contifico-links
+ * Body: { products: [{ name, contifico_id }] }
+ * La tienda configuró el código de Contífico de un producto después de la compra:
+ * se completan los ítems sin código (por nombre) para poder facturar. Nunca pisa un
+ * código ya puesto ni toca pedidos facturados o anulados.
+ */
+export async function linkWebOrderContifico(req: Request, res: Response, next: NextFunction) {
+  try {
+    const links = req.body?.products;
+    if (!Array.isArray(links) || links.length === 0 || links.length > 50) {
+      res.status(HttpStatusCode.BadRequest).send({ message: "products debe ser una lista de 1 a 50 ítems." });
+      return;
+    }
+    const byName = new Map<string, string>();
+    for (const l of links) {
+      const name = typeof l?.name === "string" ? l.name.trim() : "";
+      const id = typeof l?.contifico_id === "string" ? l.contifico_id.trim() : "";
+      if (!name || !id) {
+        res.status(HttpStatusCode.BadRequest).send({ message: "Cada ítem necesita name y contifico_id (texto)." });
+        return;
+      }
+      byName.set(normalizeString(name), id);
+    }
+
+    const order = await models.orders.findOne({ "webOrder.externalId": String(req.params.externalId || "").trim() });
+    if (!order || !order.webOrder) {
+      res.status(HttpStatusCode.NotFound).send({ message: "No existe un pedido web con ese externalId." });
+      return;
+    }
+    if (order.invoiceInfo?.id || order.voidedAt) {
+      res.status(HttpStatusCode.Ok).send({ linked: 0, skipped: order.voidedAt ? "anulado" : "facturado" });
+      return;
+    }
+
+    const linked: string[] = [];
+    for (const p of order.products as any[]) {
+      if (String(p.contifico_id ?? "").trim()) continue;
+      const id = byName.get(normalizeString(p.name));
+      if (!id) continue;
+      p.contifico_id = id;
+      linked.push(p.name);
+    }
+    if (linked.length) {
+      order.updatedBy = WEB_ORDER_CHANNEL;
+      order.auditLog.push({
+        user: WEB_ORDER_CHANNEL,
+        action: "Productos vinculados a Contífico desde la tienda",
+        at: new Date(),
+        details: linked.join(", "),
+      });
+      await order.save();
+    }
+    res.status(HttpStatusCode.Ok).send({ linked: linked.length });
+    return;
+  } catch (error) {
+    console.error("❌ [web-orders] Error vinculando productos a Contífico:", error);
+    res.status(HttpStatusCode.InternalServerError).send({ message: "Error interno al vincular productos." });
     return;
   }
 }
