@@ -15,9 +15,9 @@ export interface OperationsProductRow {
   recibido: number; // solo lo confirmado por la isla en Recepción Masiva
   recibidoOk: number; // confirmado en Recepción Masiva (el OK)
   recibidoSinOk: number; // despachado por producción pero SIN el OK de la isla
-  // Todo lo que salió vendido: isla + combos + Casa Mía + Dela Crem
+  // Todo lo que salió vendido: isla + combo o fuera de isla
   vendido: number | null;
-  ventas: { isla: number; combo: number; casaMia: number; delaCrem: number };
+  ventas: { isla: number; fueraIsla: number };
   bajas: number;
   deberiaQuedar: number | null; // inicial + recibido - vendido - bajas
   quedo: number | null; // lo que contó el cierre (stockFinal)
@@ -244,7 +244,7 @@ export class OperationsReportService {
           recibidoOk: disp.ok,
           recibidoSinOk: disp.sinOk,
           vendido: sales.available ? 0 : null,
-          ventas: { isla: 0, combo: 0, casaMia: 0, delaCrem: 0 },
+          ventas: { isla: 0, fueraIsla: 0 },
           bajas: 0,
           deberiaQuedar: null,
           quedo: null,
@@ -274,10 +274,8 @@ export class OperationsReportService {
         row.pedidoAnterior = (row.pedidoAnterior ?? 0) + r.pedidoAnterior;
       }
       row.bajas += r.bajas || 0;
-      // Combo, Casa Mía y Dela Cream los escribe la isla en el cierre
-      row.ventas.combo += r.ventaCombo || 0;
-      row.ventas.casaMia += r.ventaCasaMia || 0;
-      row.ventas.delaCrem += r.ventaDelaCrem || 0;
+      // Venta en combo o fuera de isla: la escribe la isla en el cierre
+      row.ventas.fueraIsla += r.ventaFueraIsla || 0;
       if (r.ventaImplicita !== null && r.ventaImplicita !== undefined) {
         row.ventaCierre = (row.ventaCierre || 0) + r.ventaImplicita;
       }
@@ -288,9 +286,9 @@ export class OperationsReportService {
     for (const it of initialItems) getRow(it.productName).inicial = it.quantity;
 
     for (const [key, row] of byName) {
-      // Vendido = isla (Contífico; 0 si ese día aún no hay ventas) + combos + Casa Mía + Dela Cream.
+      // Vendido = isla (Contífico; 0 si ese día aún no hay ventas) + combo o fuera de isla.
       const v = row.ventas;
-      row.vendido = (sales.available ? v.isla : 0) + v.combo + v.casaMia + v.delaCrem;
+      row.vendido = (sales.available ? v.isla : 0) + v.fueraIsla;
       // Los suministros no se venden en caja: sin cuenta de diferencia
       if (suministros.has(key)) {
         row.vendido = null;
@@ -298,7 +296,7 @@ export class OperationsReportService {
         continue;
       }
       // Regla de Operaciones (31/10/2026):
-      //   Debería quedar = Empezó + Recibido − (isla + combos + Casa Mía + Dela Cream) − Bajas
+      //   Debería quedar = Empezó + Recibido − (isla + combo o fuera de isla) − Bajas
       //   Quedó (isla)   = lo que la sucursal cuenta en la reposición del día (cierre)
       //   Diferencia     = Quedó − Debería quedar  (negativo = falta producto · positivo = sobra)
       // Regla de Gerencia (09/11/2026): si falta un dato no se calcula ni se asume.
@@ -436,7 +434,7 @@ export class OperationsReportService {
       <th style="padding:8px 8px;">Stock inicial</th>
       <th style="padding:8px 8px;" title="Pedido en el cierre de la jornada anterior">Pedido</th>
       <th style="padding:8px 8px;">Recibido</th>
-      <th style="padding:8px 8px;" title="Isla + combos + Casa Mía + Dela Cream">Vendido</th>
+      <th style="padding:8px 8px;" title="Isla + combo o fuera de isla">Vendido</th>
       <th style="padding:8px 8px;">Bajas</th>
       <th style="padding:8px 8px;">Debería quedar</th>
       <th style="padding:8px 8px;">Quedó (isla)</th>

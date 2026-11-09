@@ -443,9 +443,7 @@ export class POSRestockService {
       productName: string;
       bajas: number;
       bajasNote?: string;
-      ventaCombo?: number;
-      ventaCasaMia?: number;
-      ventaDelaCrem?: number;
+      ventaFueraIsla?: number;
       stockFinal: number | null;
       pedidoFinal?: number;
       deliveryRounds?: Array<{ label: string; quantity: number }>;
@@ -521,9 +519,7 @@ export class POSRestockService {
         category: obj?.category || "Producción",
         bajas: item.bajas,
         bajasNote: item.bajasNote,
-        ventaCombo: Math.max(0, Number(item.ventaCombo) || 0),
-        ventaCasaMia: Math.max(0, Number(item.ventaCasaMia) || 0),
-        ventaDelaCrem: Math.max(0, Number(item.ventaDelaCrem) || 0),
+        ventaFueraIsla: Math.max(0, Number(item.ventaFueraIsla) || 0),
         stockFinal: typeof item.stockFinal === "number" && Number.isFinite(item.stockFinal) ? item.stockFinal : null,
         stockObjectiveTomorrow,
         pedidoSugerido,
@@ -924,9 +920,8 @@ export class POSRestockService {
             recibido,
             bajas,
             bajasNote: item.bajasNote,
-            ventaCombo: item.ventaCombo ?? 0,
-            ventaCasaMia: item.ventaCasaMia ?? 0,
-            ventaDelaCrem: item.ventaDelaCrem ?? 0,
+            // Los cierres antiguos guardaban tres campos: se suman.
+            ventaFueraIsla: (item.ventaFueraIsla ?? 0) + (item.ventaCombo ?? 0) + (item.ventaCasaMia ?? 0) + (item.ventaDelaCrem ?? 0),
             stockFinal,
             stockFinalReportado: item.stockFinal ?? null,
             stockObjectiveTomorrow: item.stockObjectiveTomorrow ?? 0,
