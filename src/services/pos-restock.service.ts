@@ -1018,13 +1018,13 @@ export class POSRestockService {
       models.posStockObjectives.find({ branch: branchMatch(branch) }).lean() as any,
       models.posDailyEntries.findOne({ branch: branchMatch(branch), date: prev }).lean() as any,
     ]);
-    const prevByName = new Map<string, number>((prevEntry?.items || []).map((i: any) => [i.productName, i.stockFinal ?? 0]));
+    const prevByName = new Map<string, number | null>((prevEntry?.items || []).map((i: any) => [i.productName, i.stockFinal ?? null]));
     const names = new Map<string, string>();
     for (const o of objectives || []) names.set(o.productName, o.unit || "unidad");
     for (const i of prevEntry?.items || []) if (!names.has(i.productName)) names.set(i.productName, i.unit || "unidad");
     const items = [...names]
       .sort((a, b) => a[0].localeCompare(b[0], "es"))
-      .map(([productName, unit]) => ({ productName, unit, quantity: prevByName.get(productName) ?? 0 }));
+      .map(([productName, unit]) => ({ productName, unit, quantity: prevByName.get(productName) ?? null }));
     return { exists: false, branch, date, items, suggestedFromClosing: !!prevEntry };
   }
 
@@ -1032,6 +1032,7 @@ export class POSRestockService {
   async saveInitialInventory(data: { branch: string; date: string; items: any[]; note?: string; user: string }) {
     const day = parseDateStr(data.date);
     const items = (data.items || [])
+      .filter((i: any) => i?.quantity !== null && i?.quantity !== undefined && i?.quantity !== "")
       .map((i: any) => ({
         productName: String(i?.productName ?? "").trim(),
         unit: String(i?.unit ?? "unidad").trim() || "unidad",
