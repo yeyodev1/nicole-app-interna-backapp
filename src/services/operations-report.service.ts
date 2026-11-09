@@ -368,6 +368,8 @@ export class OperationsReportService {
       const descuadres = report.products.filter((p) => (p.descuadre ?? 0) !== 0);
       const incompletos = report.products.filter((p) => p.motivosIncompleto.length > 0);
       const fecha = dateStr.split("-").reverse().join("/");
+      const totalExcedentes = report.products.reduce((s, p) => s + ((p.descuadre ?? 0) > 0 ? p.descuadre! : 0), 0);
+      const totalFaltantes = report.products.reduce((s, p) => s + ((p.descuadre ?? 0) < 0 ? -p.descuadre! : 0), 0);
       const partesAsunto = [
         ...(descuadres.length > 0 ? [`${descuadres.length} producto(s) no cuadran`] : []),
         ...(incompletos.length > 0 ? [`${incompletos.length} con información incompleta`] : []),
@@ -444,8 +446,8 @@ export class OperationsReportService {
   </table>
   <p style="margin:14px 0 0;color:#374151;font-size:13px;">
     Totales: vendido <strong>${report.totals.vendido}</strong> · bajas <strong>${report.totals.bajas}</strong> ·
-    descuadre <strong style="color:${report.totals.descuadre !== 0 ? "#dc2626" : "#16a34a"};">${report.totals.descuadre > 0 ? `+${report.totals.descuadre}` : report.totals.descuadre}</strong>
-    <span style="color:#9ca3af;">(negativo = falta producto; positivo = sobra)</span>
+    excedentes <strong style="color:#16a34a;">${totalExcedentes > 0 ? `+${totalExcedentes}` : 0}</strong> ·
+    faltantes <strong style="color:${totalFaltantes > 0 ? "#dc2626" : "#16a34a"};">${totalFaltantes > 0 ? `−${totalFaltantes}` : 0}</strong>
   </p>
   ${incompletosHtml}
   ${bajasHtml}
