@@ -5,6 +5,8 @@ export interface IPOSDailyEntryItem {
   unit: string;
   bajas: number;
   bajasNote?: string;
+  ventaFueraIsla?: number; // venta en combo o fuera de isla (la escribe la isla)
+  // Campos antiguos: solo para leer cierres ya guardados.
   ventaCombo?: number; // vendido en combos (lo escribe la isla: Contífico no lo desglosa)
   ventaCasaMia?: number; // lo vendido por Casa Mía con producto de la isla (a mano)
   ventaDelaCrem?: number; // ídem Dela Cream
@@ -34,6 +36,7 @@ const POSDailyEntryItemSchema = new Schema<IPOSDailyEntryItem>(
     unit: { type: String, required: true },
     bajas: { type: Number, default: 0 },
     bajasNote: { type: String },
+    ventaFueraIsla: { type: Number, default: 0 },
     ventaCombo: { type: Number, default: 0 },
     ventaCasaMia: { type: Number, default: 0 },
     ventaDelaCrem: { type: Number, default: 0 },

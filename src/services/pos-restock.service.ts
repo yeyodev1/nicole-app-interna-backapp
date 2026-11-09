@@ -443,9 +443,7 @@ export class POSRestockService {
       productName: string;
       bajas: number;
       bajasNote?: string;
-      ventaCombo?: number;
-      ventaCasaMia?: number;
-      ventaDelaCrem?: number;
+      ventaFueraIsla?: number;
       stockFinal: number | null;
       pedidoFinal?: number;
       deliveryRounds?: Array<{ label: string; quantity: number }>;
@@ -521,9 +519,7 @@ export class POSRestockService {
         category: obj?.category || "Producción",
         bajas: item.bajas,
         bajasNote: item.bajasNote,
-        ventaCombo: Math.max(0, Number(item.ventaCombo) || 0),
-        ventaCasaMia: Math.max(0, Number(item.ventaCasaMia) || 0),
-        ventaDelaCrem: Math.max(0, Number(item.ventaDelaCrem) || 0),
+        ventaFueraIsla: Math.max(0, Number(item.ventaFueraIsla) || 0),
         stockFinal: typeof item.stockFinal === "number" && Number.isFinite(item.stockFinal) ? item.stockFinal : null,
         stockObjectiveTomorrow,
         pedidoSugerido,
@@ -924,9 +920,8 @@ export class POSRestockService {
             recibido,
             bajas,
             bajasNote: item.bajasNote,
-            ventaCombo: item.ventaCombo ?? 0,
-            ventaCasaMia: item.ventaCasaMia ?? 0,
-            ventaDelaCrem: item.ventaDelaCrem ?? 0,
+            // Los cierres antiguos guardaban tres campos: se suman.
+            ventaFueraIsla: (item.ventaFueraIsla ?? 0) + (item.ventaCombo ?? 0) + (item.ventaCasaMia ?? 0) + (item.ventaDelaCrem ?? 0),
             stockFinal,
             stockFinalReportado: item.stockFinal ?? null,
             stockObjectiveTomorrow: item.stockObjectiveTomorrow ?? 0,
@@ -1023,13 +1018,13 @@ export class POSRestockService {
       models.posStockObjectives.find({ branch: branchMatch(branch) }).lean() as any,
       models.posDailyEntries.findOne({ branch: branchMatch(branch), date: prev }).lean() as any,
     ]);
-    const prevByName = new Map<string, number>((prevEntry?.items || []).map((i: any) => [i.productName, i.stockFinal ?? 0]));
+    const prevByName = new Map<string, number | null>((prevEntry?.items || []).map((i: any) => [i.productName, i.stockFinal ?? null]));
     const names = new Map<string, string>();
     for (const o of objectives || []) names.set(o.productName, o.unit || "unidad");
     for (const i of prevEntry?.items || []) if (!names.has(i.productName)) names.set(i.productName, i.unit || "unidad");
     const items = [...names]
       .sort((a, b) => a[0].localeCompare(b[0], "es"))
-      .map(([productName, unit]) => ({ productName, unit, quantity: prevByName.get(productName) ?? 0 }));
+      .map(([productName, unit]) => ({ productName, unit, quantity: prevByName.get(productName) ?? null }));
     return { exists: false, branch, date, items, suggestedFromClosing: !!prevEntry };
   }
 
@@ -1037,6 +1032,7 @@ export class POSRestockService {
   async saveInitialInventory(data: { branch: string; date: string; items: any[]; note?: string; user: string }) {
     const day = parseDateStr(data.date);
     const items = (data.items || [])
+      .filter((i: any) => i?.quantity !== null && i?.quantity !== undefined && i?.quantity !== "")
       .map((i: any) => ({
         productName: String(i?.productName ?? "").trim(),
         unit: String(i?.unit ?? "unidad").trim() || "unidad",

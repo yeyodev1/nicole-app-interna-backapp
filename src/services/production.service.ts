@@ -685,6 +685,11 @@ export class ProductionService {
     const dispatch = (order.dispatches as any).id(dispatchId);
     if (!dispatch) throw new Error("Dispatch report not found");
 
+    // Con OK de la isla el despacho queda bloqueado.
+    if (dispatch.receptionStatus !== "PENDING") {
+      throw new Error("Edit window closed: dispatch already confirmed by the island.");
+    }
+
     // 1-Hour Edit Window Validation
     const now = new Date();
     const reportedAt = new Date(dispatch.reportedAt);
