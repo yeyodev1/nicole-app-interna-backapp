@@ -63,48 +63,6 @@ export async function getIncomingDispatches(req: Request, res: Response) {
 }
 
 /**
- * GET /api/pos/restock/sin-despacho?branch=X
- */
-export async function getRestockWithoutDispatch(req: Request, res: Response) {
-  try {
-    const { branch } = req.query;
-    if (!branch) {
-      res.status(HttpStatusCode.BadRequest).send({ message: "branch query param is required." });
-      return;
-    }
-    const data = await posService.getRestockWithoutDispatch(branch as string);
-    res.status(HttpStatusCode.Ok).send({ message: "Restock without dispatch retrieved.", data });
-  } catch (error: any) {
-    console.error("Error retrieving restock without dispatch:", error);
-    res.status(HttpStatusCode.InternalServerError).send({ message: "Failed to retrieve restock without dispatch.", error: error.message });
-  }
-}
-
-/**
- * POST /api/pos/restock/sin-despacho/:orderId/confirm
- * Body: { receivedBy, receptionNotes, items: [{ productId, quantityReceived, itemStatus, itemNote? }] }
- */
-export async function confirmRestockWithoutDispatch(req: Request, res: Response) {
-  try {
-    const { orderId } = req.params;
-    const { receivedBy, receptionNotes, items } = req.body;
-    if (!items || !Array.isArray(items)) {
-      res.status(HttpStatusCode.BadRequest).send({ message: "Items array is required for reception confirmation." });
-      return;
-    }
-    const data = await posService.confirmRestockWithoutDispatch(orderId, {
-      receivedBy: receivedBy || "POS Manager",
-      receptionNotes,
-      items,
-    });
-    res.status(HttpStatusCode.Ok).send({ message: "Reception confirmed successfully.", data });
-  } catch (error: any) {
-    console.error("Error confirming restock without dispatch:", error);
-    res.status(HttpStatusCode.InternalServerError).send({ message: "Failed to confirm reception.", error: error.message });
-  }
-}
-
-/**
  * POST /api/pos/dispatches/:orderId/:dispatchId/confirm
  * Body: { receivedBy, receptionNotes, items: [{ productId, quantityReceived, itemStatus }] }
  */
