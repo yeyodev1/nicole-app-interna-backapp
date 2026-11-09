@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 import { models } from "../models";
-import { getEcuadorNow } from "../utils/date.utils";
+import { getEcuadorNow, getOperationalDateStr } from "../utils/date.utils";
 import { IPOSStockObjective, WeeklyObjectives } from "../models/pos-stock-objective.model";
 import { IPOSDailyEntry } from "../models/pos-daily-entry.model";
 import { ContificoService } from "./contifico.service";
@@ -33,9 +33,16 @@ function toDateStr(date: Date): string {
   return date.toISOString().split("T")[0];
 }
 
+export interface PosCreditNote {
+  numero: string;
+  total: number;
+  cliente: string | null;
+}
+
 interface PosSalesAgg {
   byProductId: Map<string, number>;
   byProductName: Map<string, number>;
+  creditNotes: PosCreditNote[];
 }
 
 export class POSRestockService {
@@ -77,7 +84,9 @@ export class POSRestockService {
 
     // Hoy cambia cada rato (5 min); un día pasado casi no cambia (6 h).
     const ecTodayStr = getEcuadorNow().toISOString().split("T")[0];
-    const mongoTtl = dateStr === ecTodayStr ? 5 * 60 * 1000 : 6 * 3600 * 1000;
+    // La jornada abierta puede ser la de ayer entre las 00:00 y las 05:59.
+    const jornadaAbierta = dateStr === ecTodayStr || dateStr === getOperationalDateStr();
+    const mongoTtl = jornadaAbierta ? 5 * 60 * 1000 : 6 * 3600 * 1000;
     const cacheCol = mongoose.connection.collection("contifico_sales_cache");
 
     try {
@@ -115,12 +124,20 @@ export class POSRestockService {
         if (id) seenIds.add(id);
         nuevos++;
 
-        if (doc.anulado || doc.tipo_documento !== "FAC" || !doc.pos) continue;
+        if (doc.anulado || !doc.pos || !["FAC", "NCT"].includes(doc.tipo_documento)) continue;
 
         let agg = byPos.get(doc.pos);
         if (!agg) {
-          agg = { byProductId: new Map(), byProductName: new Map() };
+          agg = { byProductId: new Map(), byProductName: new Map(), creditNotes: [] };
           byPos.set(doc.pos, agg);
+        }
+        if (doc.tipo_documento === "NCT") {
+          agg.creditNotes.push({
+            numero: String(doc.documento || ""),
+            total: parseFloat(doc.total || "0"),
+            cliente: doc.persona?.razon_social || null,
+          });
+          continue;
         }
         for (const det of doc.detalles || []) {
           const qty = parseFloat(det.cantidad || "0");
@@ -153,12 +170,13 @@ export class POSRestockService {
     return byPos;
   }
 
-  private serializeByPos(byPos: Map<string, PosSalesAgg>): Record<string, { byId: Record<string, number>; byName: Record<string, number> }> {
-    const out: Record<string, { byId: Record<string, number>; byName: Record<string, number> }> = {};
+  private serializeByPos(byPos: Map<string, PosSalesAgg>): Record<string, { byId: Record<string, number>; byName: Record<string, number>; creditNotes: PosCreditNote[] }> {
+    const out: Record<string, { byId: Record<string, number>; byName: Record<string, number>; creditNotes: PosCreditNote[] }> = {};
     for (const [pos, agg] of byPos) {
       out[pos] = {
         byId: Object.fromEntries(agg.byProductId),
         byName: Object.fromEntries(agg.byProductName),
+        creditNotes: agg.creditNotes,
       };
     }
     return out;
@@ -170,6 +188,7 @@ export class POSRestockService {
       byPos.set(pos, {
         byProductId: new Map(Object.entries((agg as any).byId || {})),
         byProductName: new Map(Object.entries((agg as any).byName || {})),
+        creditNotes: (agg as any).creditNotes || [],
       });
     }
     return byPos;
@@ -182,9 +201,8 @@ export class POSRestockService {
    * bloquea por esto.
    */
   async getDailySales(branch: string, dateStr?: string) {
-    const ecNow = getEcuadorNow();
-    const date = dateStr || ecNow.toISOString().split("T")[0];
-    const empty = { branch, date, available: false, puntos: [] as string[], products: {} as Record<string, number> };
+    const date = dateStr || getOperationalDateStr();
+    const empty = { branch, date, available: false, puntos: [] as string[], products: {} as Record<string, number>, notasCredito: [] as PosCreditNote[] };
 
     try {
       const puntosEmision = await this.getPuntosEmisionCached();
@@ -227,6 +245,7 @@ export class POSRestockService {
         available: true,
         puntos: targets.map((p: any) => `${codeOf(p)} ${p.direccion || p.nombre || ""}`.trim()),
         products: sumFor(targets),
+        notasCredito: targets.flatMap((t: any) => byPos.get(t.id)?.creditNotes || []),
       };
     } catch (err: any) {
       console.warn(`⚠️ [POS] No se pudo leer la venta de ${branch} (${date}) en Contífico: ${err?.message || err}`);
@@ -277,8 +296,7 @@ export class POSRestockService {
    * - Lists upcoming future orders (informational only)
    */
   async getDailyForm(branch: string, dateStr?: string) {
-    const ecNow = getEcuadorNow();
-    const formDateStr = dateStr || ecNow.toISOString().split("T")[0];
+    const formDateStr = dateStr || getOperationalDateStr();
     const formDate = parseDateStr(formDateStr);
 
     const targetDate = new Date(formDate);
@@ -428,7 +446,7 @@ export class POSRestockService {
       ventaCombo?: number;
       ventaCasaMia?: number;
       ventaDelaCrem?: number;
-      stockFinal: number;
+      stockFinal: number | null;
       pedidoFinal?: number;
       deliveryRounds?: Array<{ label: string; quantity: number }>;
       detailedLosses?: Array<{
@@ -438,7 +456,8 @@ export class POSRestockService {
       }>;
     }>,
     submittedBy: string,
-    requestedByUserId?: string
+    requestedByUserId?: string,
+    notasCreditoCajera: Array<{ factura: string; monto: number; motivo: string }> = []
   ): Promise<IPOSDailyEntry> {
     const date = parseDateStr(dateStr);
 
@@ -492,7 +511,7 @@ export class POSRestockService {
       const stockObjectiveTomorrow = obj
         ? getObjectiveForDow(obj.objectives as WeeklyObjectives, targetDow)
         : 0;
-      const pedidoSugerido = Math.max(0, stockObjectiveTomorrow - item.stockFinal);
+      const pedidoSugerido = Math.max(0, stockObjectiveTomorrow - (item.stockFinal ?? 0));
       const pedidoFinal = item.pedidoFinal !== undefined ? item.pedidoFinal : pedidoSugerido;
 
       return {
@@ -505,7 +524,7 @@ export class POSRestockService {
         ventaCombo: Math.max(0, Number(item.ventaCombo) || 0),
         ventaCasaMia: Math.max(0, Number(item.ventaCasaMia) || 0),
         ventaDelaCrem: Math.max(0, Number(item.ventaDelaCrem) || 0),
-        stockFinal: item.stockFinal,
+        stockFinal: typeof item.stockFinal === "number" && Number.isFinite(item.stockFinal) ? item.stockFinal : null,
         stockObjectiveTomorrow,
         pedidoSugerido,
         pedidoFinal,
@@ -522,6 +541,9 @@ export class POSRestockService {
           submittedBy,
           submittedAt: new Date(),
           items: processedItems,
+          notasCreditoCajera: notasCreditoCajera
+            .map((n) => ({ factura: String(n.factura || "").trim(), monto: Number(n.monto) || 0, motivo: String(n.motivo || "").trim() }))
+            .filter((n) => n.factura && n.monto > 0 && n.motivo),
           status: "submitted",
         },
       },
@@ -906,8 +928,10 @@ export class POSRestockService {
             ventaCasaMia: item.ventaCasaMia ?? 0,
             ventaDelaCrem: item.ventaDelaCrem ?? 0,
             stockFinal,
+            stockFinalReportado: item.stockFinal ?? null,
             stockObjectiveTomorrow: item.stockObjectiveTomorrow ?? 0,
             pedidoFinal: item.pedidoFinal ?? 0,
+            pedidoAnterior: prevItem ? (prevItem.pedidoFinal ?? 0) : null,
             // Sin cierre previo, el recibido es el punto de partida.
             ventaImplicita: (stockInicial ?? 0) + recibido - bajas - stockFinal,
             submittedBy: entry.submittedBy,

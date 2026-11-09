@@ -12,6 +12,18 @@ export function getEcuadorNow(): Date {
 }
 
 /**
+ * Fecha (YYYY-MM-DD) de la jornada operativa en Ecuador.
+ * Entre las 00:00 y las 05:59 sigue siendo la jornada del día anterior.
+ */
+export function getOperationalDateStr(): string {
+  const ecNow = getEcuadorNow();
+  if (ecNow.getUTCHours() < 6) {
+    ecNow.setUTCDate(ecNow.getUTCDate() - 1);
+  }
+  return ecNow.toISOString().split("T")[0];
+}
+
+/**
  * Creates MongoDB-compatible date ranges for Ecuador boundaries.
  * @param dateStr Format YYYY-MM-DD
  * @param isFullTimestamp If true, adds 5 hours to the UTC conversion to align with EC midnight.

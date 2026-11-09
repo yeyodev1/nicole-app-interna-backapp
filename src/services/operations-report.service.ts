@@ -12,7 +12,7 @@ export interface OperationsProductRow {
   name: string;
   categoria: string | null; // tal cual Contífico (subcategorías de "Producto Venta")
   inicial: number | null; // con cuánto empezó el día (cierre anterior)
-  recibido: number; // total que le llegó (confirmado + despachado sin OK)
+  recibido: number; // solo lo confirmado por la isla en Recepción Masiva
   recibidoOk: number; // confirmado en Recepción Masiva (el OK)
   recibidoSinOk: number; // despachado por producción pero SIN el OK de la isla
   // Todo lo que salió vendido: isla + combos + Casa Mía + Dela Crem
@@ -26,6 +26,8 @@ export interface OperationsProductRow {
   descuadre: number | null;
   ventaCierre: number | null; // venta implícita del cierre (dato de apoyo)
   pedidoFinal: number;
+  pedidoAnterior: number | null; // pedido en el cierre de la jornada anterior
+  motivosIncompleto: string[]; // con motivos no se calcula ni entra en totales
 }
 
 export interface OperationsBranchReport {
@@ -37,6 +39,10 @@ export interface OperationsBranchReport {
   totals: { vendido: number; ventaCierre: number; bajas: number; recibido: number; descuadre: number };
   products: OperationsProductRow[];
   losses: Array<{ productName: string; quantity: number; reason: string; category: string }>;
+  notasCredito: {
+    contifico: Array<{ fecha: string; numero: string; total: number; cliente: string | null }>;
+    cajera: Array<{ fecha: string; factura: string; monto: number; motivo: string }>;
+  };
 }
 
 /**
@@ -171,6 +177,7 @@ export class OperationsReportService {
     // Venta de la isla en Contífico acumulada en el rango (caché Mongo por día).
     let salesAvailable = false;
     const salesTotals: Record<string, number> = {};
+    const notasContifico: OperationsBranchReport["notasCredito"]["contifico"] = [];
     const add = (acc: Record<string, number>, products: Record<string, number>) => {
       for (const [name, qty] of Object.entries(products)) acc[name] = (acc[name] || 0) + qty;
     };
@@ -179,11 +186,28 @@ export class OperationsReportService {
       if (!daySales.available) continue;
       salesAvailable = true;
       add(salesTotals, daySales.products);
+      notasContifico.push(...daySales.notasCredito.map((n) => ({ ...n, fecha: day })));
     }
     const sales = { available: salesAvailable, products: salesTotals };
     const firstDay = days[0];
     const lastDay = days[days.length - 1];
     const bKey = normalizeString(branch);
+
+    const cierresNotas = (await models.posDailyEntries
+      .find({
+        branch: new RegExp(`^${branch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"),
+        date: { $gte: new Date(`${firstDay}T00:00:00.000Z`), $lte: new Date(`${lastDay}T23:59:59.999Z`) },
+      })
+      .select("date notasCreditoCajera")
+      .lean()) as any[];
+    const notasCajera = cierresNotas.flatMap((e) =>
+      (e.notasCreditoCajera || []).map((n: any) => ({
+        fecha: new Date(e.date).toISOString().split("T")[0],
+        factura: n.factura,
+        monto: n.monto,
+        motivo: n.motivo,
+      }))
+    );
 
     // Suministros manuales (isGeneral): llegan por despacho pero no se venden
     // en caja — sin esto aparecían como "faltantes" gigantes falsos.
@@ -216,7 +240,7 @@ export class OperationsReportService {
           name,
           categoria: categoryMaps.byName.get(key) || null,
           inicial: null,
-          recibido: disp.ok + disp.sinOk,
+          recibido: disp.ok,
           recibidoOk: disp.ok,
           recibidoSinOk: disp.sinOk,
           vendido: sales.available ? 0 : null,
@@ -227,6 +251,8 @@ export class OperationsReportService {
           descuadre: null,
           ventaCierre: null,
           pedidoFinal: 0,
+          pedidoAnterior: null,
+          motivosIncompleto: [],
         };
         byName.set(key, row);
       }
@@ -241,8 +267,11 @@ export class OperationsReportService {
       // Rango: inicial del primer día, quedó del último, bajas acumuladas
       if (r.date === firstDay) row.inicial = r.stockInicial ?? null;
       if (r.date === lastDay) {
-        row.quedo = r.stockFinal ?? null;
+        row.quedo = r.stockFinalReportado ?? null;
         row.pedidoFinal = r.pedidoFinal || 0;
+      }
+      if (r.pedidoAnterior !== null && r.pedidoAnterior !== undefined) {
+        row.pedidoAnterior = (row.pedidoAnterior ?? 0) + r.pedidoAnterior;
       }
       row.bajas += r.bajas || 0;
       // Combo, Casa Mía y Dela Cream los escribe la isla en el cierre
@@ -272,8 +301,20 @@ export class OperationsReportService {
       //   Debería quedar = Empezó + Recibido − (isla + combos + Casa Mía + Dela Cream) − Bajas
       //   Quedó (isla)   = lo que la sucursal cuenta en la reposición del día (cierre)
       //   Diferencia     = Quedó − Debería quedar  (negativo = falta producto · positivo = sobra)
-      row.deberiaQuedar = (row.inicial ?? 0) + row.recibido - row.vendido - row.bajas;
-      if (row.quedo !== null) row.descuadre = row.quedo - row.deberiaQuedar;
+      // Regla de Gerencia (09/11/2026): si falta un dato no se calcula ni se asume.
+      const motivos: string[] = [];
+      if (!sales.available) motivos.push("Sin venta de Contífico");
+      if (row.inicial === null) motivos.push("Falta cierre del día anterior o sus excedentes");
+      if (row.recibidoSinOk > 0) motivos.push("Falta OK de recepción");
+      if ((row.pedidoAnterior ?? 0) > 0 && row.recibidoOk + row.recibidoSinOk === 0) {
+        motivos.push("Falta confirmar recepción");
+      }
+      if (row.quedo === null) motivos.push("Excedentes sin reporte");
+      row.motivosIncompleto = motivos;
+      if (motivos.length > 0) continue;
+
+      row.deberiaQuedar = row.inicial! + row.recibido - row.vendido - row.bajas;
+      row.descuadre = row.quedo! - row.deberiaQuedar;
     }
 
     const products = Array.from(byName.values()).sort((a, b) => {
@@ -284,6 +325,7 @@ export class OperationsReportService {
 
     const totals = products.reduce(
       (acc, p) => {
+        if (p.motivosIncompleto.length > 0) return acc;
         acc.vendido += p.vendido ?? 0;
         acc.ventaCierre += p.ventaCierre ?? 0;
         acc.bajas += p.bajas;
@@ -295,7 +337,10 @@ export class OperationsReportService {
     );
 
     const sinOkTotal = products.reduce((s, p) => s + p.recibidoSinOk, 0);
-    return { branch, salesAvailable: sales.available, hasClosing: rows.length > 0, sinOkTotal, totals, products, losses };
+    return {
+      branch, salesAvailable: sales.available, hasClosing: rows.length > 0, sinOkTotal, totals, products, losses,
+      notasCredito: { contifico: notasContifico, cajera: notasCajera },
+    };
   }
 
   /**
@@ -321,14 +366,19 @@ export class OperationsReportService {
       const report = await this.buildBranchRange(branch, [dateStr], leftovers, lossesDocs, categoryMaps, dispatchMap);
 
       const descuadres = report.products.filter((p) => (p.descuadre ?? 0) !== 0);
+      const incompletos = report.products.filter((p) => p.motivosIncompleto.length > 0);
       const fecha = dateStr.split("-").reverse().join("/");
-      const asunto = descuadres.length > 0
-        ? `⚠️ Cierre ${branch} ${fecha}: ${descuadres.length} producto(s) no cuadran`
+      const partesAsunto = [
+        ...(descuadres.length > 0 ? [`${descuadres.length} producto(s) no cuadran`] : []),
+        ...(incompletos.length > 0 ? [`${incompletos.length} con información incompleta`] : []),
+      ];
+      const asunto = partesAsunto.length > 0
+        ? `⚠️ Cierre ${branch} ${fecha}: ${partesAsunto.join(" · ")}`
         : `✅ Cierre ${branch} ${fecha}: todo cuadra`;
 
       const td = `padding:6px 8px;border-bottom:1px solid #f1f5f9;`;
       const recibidoCell = (p: OperationsProductRow) => {
-        if (!p.recibido) return "";
+        if (!p.recibido && !p.recibidoSinOk) return "";
         const sinOk = p.recibidoSinOk > 0
           ? ` <span style="color:#d97706;font-size:10px;font-weight:bold;">⚠ ${p.recibidoSinOk} sin OK</span>`
           : "";
@@ -338,6 +388,7 @@ export class OperationsReportService {
         <tr>
           <td style="${td}">${p.name}${p.categoria ? ` <span style="font-size:10px;color:#7c3aed;">(${p.categoria})</span>` : ""}</td>
           <td align="center" style="${td}">${p.inicial ?? "—"}</td>
+          <td align="center" style="${td}">${p.pedidoAnterior ?? "—"}</td>
           <td align="center" style="${td}">${recibidoCell(p)}</td>
           <td align="center" style="${td}">${p.vendido ?? "—"}</td>
           <td align="center" style="${td}">${p.bajas || ""}</td>
@@ -353,6 +404,26 @@ export class OperationsReportService {
            </ul>`
         : `<p style="margin:16px 0 0;color:#16a34a;font-size:13px;">Sin bajas reportadas.</p>`;
 
+      const { contifico: ncContifico, cajera: ncCajera } = report.notasCredito;
+      const notasCreditoHtml = ncContifico.length || ncCajera.length
+        ? `<p style="margin:16px 0 6px;font-weight:bold;color:#374151;">Notas de crédito (no se restan de lo vendido):</p>
+           ${ncContifico.length ? `<p style="margin:4px 0;color:#6b7280;font-size:12px;">Contífico</p>
+           <ul style="margin:0;padding-left:18px;color:#374151;font-size:13px;">
+             ${ncContifico.map((n) => `<li>${n.numero} · $${n.total.toFixed(2)}${n.cliente ? ` · ${n.cliente}` : ""}</li>`).join("")}
+           </ul>` : ""}
+           ${ncCajera.length ? `<p style="margin:8px 0 4px;color:#6b7280;font-size:12px;">Reportadas por la cajera</p>
+           <ul style="margin:0;padding-left:18px;color:#374151;font-size:13px;">
+             ${ncCajera.map((n) => `<li>Factura ${n.factura} · $${n.monto.toFixed(2)} · ${n.motivo}</li>`).join("")}
+           </ul>` : ""}`
+        : "";
+
+      const incompletosHtml = incompletos.length
+        ? `<p style="margin:16px 0 6px;font-weight:bold;color:#92400e;">Información incompleta, no se calculó (${incompletos.length}):</p>
+           <ul style="margin:0;padding-left:18px;color:#374151;font-size:13px;">
+             ${incompletos.map((p) => `<li><strong>${p.name}</strong> — ${p.motivosIncompleto.join("; ")}</li>`).join("")}
+           </ul>`
+        : "";
+
       const html = `
 <div style="font-family:Arial,Helvetica,sans-serif;max-width:640px;margin:0 auto;background:#ffffff;border-radius:14px;border:1px solid #e5e7eb;padding:28px;">
   <h2 style="margin:0 0 4px;color:#7c3aed;">Cierre de ${branch} — ${fecha}</h2>
@@ -361,6 +432,7 @@ export class OperationsReportService {
     <tr style="background:#f8fafc;color:#475569;">
       <th align="left" style="padding:8px 8px;">Producto</th>
       <th style="padding:8px 8px;">Stock inicial</th>
+      <th style="padding:8px 8px;" title="Pedido en el cierre de la jornada anterior">Pedido</th>
       <th style="padding:8px 8px;">Recibido</th>
       <th style="padding:8px 8px;" title="Isla + combos + Casa Mía + Dela Cream">Vendido</th>
       <th style="padding:8px 8px;">Bajas</th>
@@ -368,19 +440,21 @@ export class OperationsReportService {
       <th style="padding:8px 8px;">Quedó (isla)</th>
       <th style="padding:8px 8px;">Diferencia</th>
     </tr>
-    ${(descuadres.length > 0 ? descuadres : report.products.slice(0, 15)).map(fila).join("")}
+    ${(descuadres.length > 0 ? descuadres : report.products.filter((p) => p.motivosIncompleto.length === 0).slice(0, 15)).map(fila).join("")}
   </table>
   <p style="margin:14px 0 0;color:#374151;font-size:13px;">
     Totales: vendido <strong>${report.totals.vendido}</strong> · bajas <strong>${report.totals.bajas}</strong> ·
     descuadre <strong style="color:${report.totals.descuadre !== 0 ? "#dc2626" : "#16a34a"};">${report.totals.descuadre > 0 ? `+${report.totals.descuadre}` : report.totals.descuadre}</strong>
     <span style="color:#9ca3af;">(negativo = falta producto; positivo = sobra)</span>
   </p>
+  ${incompletosHtml}
   ${bajasHtml}
   ${report.sinOkTotal > 0 ? `
   <p style="margin:14px 0 0;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:8px 12px;color:#92400e;font-size:12px;">
     ⚠ <strong>${report.sinOkTotal} unidades</strong> fueron despachadas por producción pero la isla
-    <strong>no dio el OK</strong> en Recepción Masiva. Se cuentan igual, pero pide que confirmen la recepción.
+    <strong>no dio el OK</strong> en Recepción Masiva. No se cuentan y esos productos salen como información incompleta.
   </p>` : ""}
+  ${notasCreditoHtml}
   <p style="margin:18px 0 0;font-size:12px;color:#9ca3af;">Detalle completo en app.nicole.com.ec → Reporte de Operaciones.</p>
 </div>`;
 

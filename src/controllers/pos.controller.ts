@@ -3,7 +3,7 @@ import { HttpStatusCode } from "axios";
 import { POSService } from "../services/pos.service";
 import { POSRestockService } from "../services/pos-restock.service";
 import { OperationsReportService } from "../services/operations-report.service";
-import { getECDateRange, getEcuadorNow } from "../utils/date.utils";
+import { getECDateRange, getEcuadorNow, getOperationalDateStr } from "../utils/date.utils";
 
 const posService = new POSService();
 const posRestockService = new POSRestockService();
@@ -59,6 +59,48 @@ export async function getIncomingDispatches(req: Request, res: Response) {
   } catch (error: any) {
     console.error("Error retrieving incoming dispatches:", error);
     res.status(HttpStatusCode.InternalServerError).send({ message: "Failed to retrieve dispatches.", error: error.message });
+  }
+}
+
+/**
+ * GET /api/pos/restock/sin-despacho?branch=X
+ */
+export async function getRestockWithoutDispatch(req: Request, res: Response) {
+  try {
+    const { branch } = req.query;
+    if (!branch) {
+      res.status(HttpStatusCode.BadRequest).send({ message: "branch query param is required." });
+      return;
+    }
+    const data = await posService.getRestockWithoutDispatch(branch as string);
+    res.status(HttpStatusCode.Ok).send({ message: "Restock without dispatch retrieved.", data });
+  } catch (error: any) {
+    console.error("Error retrieving restock without dispatch:", error);
+    res.status(HttpStatusCode.InternalServerError).send({ message: "Failed to retrieve restock without dispatch.", error: error.message });
+  }
+}
+
+/**
+ * POST /api/pos/restock/sin-despacho/:orderId/confirm
+ * Body: { receivedBy, receptionNotes, items: [{ productId, quantityReceived, itemStatus, itemNote? }] }
+ */
+export async function confirmRestockWithoutDispatch(req: Request, res: Response) {
+  try {
+    const { orderId } = req.params;
+    const { receivedBy, receptionNotes, items } = req.body;
+    if (!items || !Array.isArray(items)) {
+      res.status(HttpStatusCode.BadRequest).send({ message: "Items array is required for reception confirmation." });
+      return;
+    }
+    const data = await posService.confirmRestockWithoutDispatch(orderId, {
+      receivedBy: receivedBy || "POS Manager",
+      receptionNotes,
+      items,
+    });
+    res.status(HttpStatusCode.Ok).send({ message: "Reception confirmed successfully.", data });
+  } catch (error: any) {
+    console.error("Error confirming restock without dispatch:", error);
+    res.status(HttpStatusCode.InternalServerError).send({ message: "Failed to confirm reception.", error: error.message });
   }
 }
 
@@ -294,13 +336,18 @@ export async function getOperationsReport(req: Request, res: Response): Promise<
  */
 export async function submitRestockDailyEntry(req: Request, res: Response): Promise<void> {
   try {
-    const { branch, date, submittedBy, items } = req.body;
-    if (!branch || !date || !submittedBy || !Array.isArray(items)) {
-      res.status(HttpStatusCode.BadRequest).send({ message: "branch, date, submittedBy, and items[] are required." });
+    const { branch, submittedBy, items, notasCreditoCajera } = req.body;
+    // La fecha del cierre la define siempre el servidor (jornada operativa).
+    const date = getOperationalDateStr();
+    if (!branch || !submittedBy || !Array.isArray(items)) {
+      res.status(HttpStatusCode.BadRequest).send({ message: "branch, submittedBy, and items[] are required." });
       return;
     }
     const requestedByUserId = (req as any).user?.id || (req as any).user?._id;
-    const data = await posRestockService.submitDailyEntry(branch, date, items, submittedBy, requestedByUserId);
+    const data = await posRestockService.submitDailyEntry(
+      branch, date, items, submittedBy, requestedByUserId,
+      Array.isArray(notasCreditoCajera) ? notasCreditoCajera : []
+    );
 
     // Alerta a los Jefes de Operaciones (correo vía Resend). Se espera aquí
     // porque en serverless el proceso muere al responder, pero nunca bloquea:

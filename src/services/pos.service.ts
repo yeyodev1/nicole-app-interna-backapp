@@ -1,5 +1,6 @@
 import { models } from "../models";
 import { Types } from "mongoose";
+import { getOperationalDateStr } from "../utils/date.utils";
 
 export class POSService {
 
@@ -120,6 +121,92 @@ export class POSService {
 
     await order.save();
     return dispatch;
+  }
+
+  /**
+   * Reposición pedida en el cierre de la jornada anterior que CDP no registró.
+   * Solo incluye productos sin ningún despacho.
+   */
+  async getRestockWithoutDispatch(branch: string) {
+    const [y, m, d] = getOperationalDateStr().split("-").map(Number);
+    const orderDate = new Date(Date.UTC(y, m - 1, d - 1));
+    const orders = (await models.orders
+      .find({
+        branch: { $regex: new RegExp(`^${branch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
+        orderDate,
+        salesChannel: { $in: ["Restock", "Restock-Bodega"] },
+      })
+      .select("products dispatches comments")
+      .lean()) as any[];
+
+    return orders.flatMap((order) => {
+      const despachados = new Set(
+        (order.dispatches || []).flatMap((x: any) => (x.items || []).map((i: any) => String(i.productId)))
+      );
+      const items = (order.products || [])
+        .filter((p: any) => !despachados.has(String(p._id)))
+        .map((p: any) => ({ productId: String(p._id), name: p.name, quantity: p.quantity }));
+      return items.length > 0 ? [{ orderId: String(order._id), comments: order.comments || null, items }] : [];
+    });
+  }
+
+  /**
+   * La isla confirma una reposición que CDP no registró: crea el despacho ya
+   * recibido, con lo pedido como enviado y lo contado por la isla como recibido.
+   */
+  async confirmRestockWithoutDispatch(orderId: string, data: {
+    receivedBy: string,
+    receptionNotes?: string,
+    items: { productId: string, quantityReceived: number, itemStatus: string, itemNote?: string }[]
+  }) {
+    if (!Types.ObjectId.isValid(orderId)) throw new Error("Invalid ID format");
+
+    const order: any = await models.orders.findById(orderId);
+    if (!order) throw new Error("Order not found");
+    if (!["Restock", "Restock-Bodega"].includes(String(order.salesChannel))) {
+      throw new Error("Solo aplica a reposiciones");
+    }
+
+    const yaDespachados = new Set(
+      order.dispatches.flatMap((x: any) => x.items.map((i: any) => String(i.productId)))
+    );
+    const items = data.items.flatMap((rec) => {
+      const product = order.products.find((p: any) => String(p._id) === rec.productId);
+      if (!product || yaDespachados.has(rec.productId)) return [];
+      return [{
+        productId: rec.productId,
+        name: product.name,
+        quantitySent: product.quantity,
+        quantityReceived: rec.quantityReceived,
+        itemStatus: rec.itemStatus,
+        ...(rec.itemNote !== undefined ? { itemNote: rec.itemNote } : {}),
+      }];
+    });
+    if (items.length === 0) return null;
+
+    const hasIssues = items.some((i) => i.itemStatus !== "OK" || i.quantityReceived !== i.quantitySent);
+    const now = new Date();
+    order.dispatches.push({
+      reportedAt: now,
+      modifiedAt: now,
+      destination: order.branch,
+      items,
+      notes: "Sin registro de CDP: creado desde Recepción Masiva con lo pedido en el cierre",
+      reportedBy: "Recepción Masiva (sin registro de CDP)",
+      receptionStatus: hasIssues ? "PROBLEM" : "RECEIVED",
+      receivedAt: now,
+      receivedBy: data.receivedBy,
+      receptionNotes: data.receptionNotes,
+    });
+
+    const enviado = new Map<string, number>();
+    for (const x of order.dispatches) {
+      for (const i of x.items) enviado.set(String(i.productId), (enviado.get(String(i.productId)) || 0) + i.quantitySent);
+    }
+    order.dispatchStatus = order.products.every((p: any) => (enviado.get(String(p._id)) || 0) >= p.quantity) ? "SENT" : "PARTIAL";
+
+    await order.save();
+    return order.dispatches[order.dispatches.length - 1];
   }
 
   /**
