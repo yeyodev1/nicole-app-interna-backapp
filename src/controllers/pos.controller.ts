@@ -308,6 +308,23 @@ export async function submitRestockDailyEntry(req: Request, res: Response): Prom
       res.status(HttpStatusCode.BadRequest).send({ message: `Falta el motivo de la baja en "${sinMotivo.productName}".` });
       return;
     }
+    const entero = (v: unknown) => Number.isInteger(v) && (v as number) >= 0;
+    const invalido = items.find((i: any) =>
+      !entero(i?.bajas ?? 0) || !entero(i?.ventaFueraIsla ?? 0) || !entero(i?.pedidoFinal ?? 0) ||
+      (i?.stockFinal !== null && i?.stockFinal !== undefined && !entero(i.stockFinal))
+    );
+    if (invalido) {
+      res.status(HttpStatusCode.BadRequest).send({ message: `Cantidad inválida en "${invalido.productName}". Usa números enteros sin negativos.` });
+      return;
+    }
+    const notaInvalida = (Array.isArray(notasCreditoCajera) ? notasCreditoCajera : []).find((n: any) => {
+      const monto = Number(n?.monto);
+      return !String(n?.factura || "").trim() || !String(n?.motivo || "").trim() || !(monto > 0) || Math.round(monto * 100) / 100 !== monto;
+    });
+    if (notaInvalida) {
+      res.status(HttpStatusCode.BadRequest).send({ message: "Nota de crédito incompleta o con monto inválido." });
+      return;
+    }
     const requestedByUserId = (req as any).user?.id || (req as any).user?._id;
     const data = await posRestockService.submitDailyEntry(
       branch, date, items, submittedBy, requestedByUserId,
