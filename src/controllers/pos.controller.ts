@@ -301,6 +301,13 @@ export async function submitRestockDailyEntry(req: Request, res: Response): Prom
       res.status(HttpStatusCode.BadRequest).send({ message: "branch, submittedBy, and items[] are required." });
       return;
     }
+    const sinMotivo = items.find((i: any) =>
+      Number(i?.bajas) > 0 && !(i?.detailedLosses || []).some((l: any) => String(l?.reason || "").trim())
+    );
+    if (sinMotivo) {
+      res.status(HttpStatusCode.BadRequest).send({ message: `Falta el motivo de la baja en "${sinMotivo.productName}".` });
+      return;
+    }
     const requestedByUserId = (req as any).user?.id || (req as any).user?._id;
     const data = await posRestockService.submitDailyEntry(
       branch, date, items, submittedBy, requestedByUserId,
