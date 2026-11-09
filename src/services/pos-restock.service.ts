@@ -428,7 +428,7 @@ export class POSRestockService {
       ventaCombo?: number;
       ventaCasaMia?: number;
       ventaDelaCrem?: number;
-      stockFinal: number;
+      stockFinal: number | null;
       pedidoFinal?: number;
       deliveryRounds?: Array<{ label: string; quantity: number }>;
       detailedLosses?: Array<{
@@ -492,7 +492,7 @@ export class POSRestockService {
       const stockObjectiveTomorrow = obj
         ? getObjectiveForDow(obj.objectives as WeeklyObjectives, targetDow)
         : 0;
-      const pedidoSugerido = Math.max(0, stockObjectiveTomorrow - item.stockFinal);
+      const pedidoSugerido = Math.max(0, stockObjectiveTomorrow - (item.stockFinal ?? 0));
       const pedidoFinal = item.pedidoFinal !== undefined ? item.pedidoFinal : pedidoSugerido;
 
       return {
@@ -505,7 +505,7 @@ export class POSRestockService {
         ventaCombo: Math.max(0, Number(item.ventaCombo) || 0),
         ventaCasaMia: Math.max(0, Number(item.ventaCasaMia) || 0),
         ventaDelaCrem: Math.max(0, Number(item.ventaDelaCrem) || 0),
-        stockFinal: item.stockFinal,
+        stockFinal: typeof item.stockFinal === "number" && Number.isFinite(item.stockFinal) ? item.stockFinal : null,
         stockObjectiveTomorrow,
         pedidoSugerido,
         pedidoFinal,
@@ -906,6 +906,7 @@ export class POSRestockService {
             ventaCasaMia: item.ventaCasaMia ?? 0,
             ventaDelaCrem: item.ventaDelaCrem ?? 0,
             stockFinal,
+            stockFinalReportado: item.stockFinal ?? null,
             stockObjectiveTomorrow: item.stockObjectiveTomorrow ?? 0,
             pedidoFinal: item.pedidoFinal ?? 0,
             // Sin cierre previo, el recibido es el punto de partida.

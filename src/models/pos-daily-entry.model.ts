@@ -8,7 +8,7 @@ export interface IPOSDailyEntryItem {
   ventaCombo?: number; // vendido en combos (lo escribe la isla: Contífico no lo desglosa)
   ventaCasaMia?: number; // lo vendido por Casa Mía con producto de la isla (a mano)
   ventaDelaCrem?: number; // ídem Dela Cream
-  stockFinal: number;
+  stockFinal: number | null; // null = Sin reporte
   stockObjectiveTomorrow: number;
   pedidoSugerido: number;
   pedidoFinal: number;
@@ -36,7 +36,7 @@ const POSDailyEntryItemSchema = new Schema<IPOSDailyEntryItem>(
     ventaCombo: { type: Number, default: 0 },
     ventaCasaMia: { type: Number, default: 0 },
     ventaDelaCrem: { type: Number, default: 0 },
-    stockFinal: { type: Number, required: true },
+    stockFinal: { type: Number, default: null },
     stockObjectiveTomorrow: { type: Number, required: true },
     pedidoSugerido: { type: Number, required: true },
     pedidoFinal: { type: Number, required: true },
