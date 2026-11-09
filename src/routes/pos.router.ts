@@ -2,6 +2,8 @@ import express from "express";
 import {
   getIncomingDispatches,
   confirmReception,
+  getRestockWithoutDispatch,
+  confirmRestockWithoutDispatch,
   getPickupOrders,
   deliverPickupOrder,
   getRestockObjectives,
@@ -26,6 +28,8 @@ router.use(authMiddleware);
 
 // GET /api/pos/dispatches?branch=San%20Marino
 router.get("/dispatches", getIncomingDispatches);
+router.get("/restock/sin-despacho", getRestockWithoutDispatch);
+router.post("/restock/sin-despacho/:orderId/confirm", confirmRestockWithoutDispatch);
 
 // POST /api/pos/dispatches/:orderId/:dispatchId/confirm
 router.post("/dispatches/:orderId/:dispatchId/confirm", confirmReception);

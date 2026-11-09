@@ -307,7 +307,7 @@ export class OperationsReportService {
       if (row.inicial === null) motivos.push("Falta cierre del día anterior o sus excedentes");
       if (row.recibidoSinOk > 0) motivos.push("Falta OK de recepción");
       if ((row.pedidoAnterior ?? 0) > 0 && row.recibidoOk + row.recibidoSinOk === 0) {
-        motivos.push("Falta registro de despacho de CDP");
+        motivos.push("Falta confirmar recepción");
       }
       if (row.quedo === null) motivos.push("Excedentes sin reporte");
       row.motivosIncompleto = motivos;
