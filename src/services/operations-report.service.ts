@@ -341,14 +341,19 @@ export class OperationsReportService {
       const report = await this.buildBranchRange(branch, [dateStr], leftovers, lossesDocs, categoryMaps, dispatchMap);
 
       const descuadres = report.products.filter((p) => (p.descuadre ?? 0) !== 0);
+      const incompletos = report.products.filter((p) => p.motivosIncompleto.length > 0);
       const fecha = dateStr.split("-").reverse().join("/");
-      const asunto = descuadres.length > 0
-        ? `⚠️ Cierre ${branch} ${fecha}: ${descuadres.length} producto(s) no cuadran`
+      const partesAsunto = [
+        ...(descuadres.length > 0 ? [`${descuadres.length} producto(s) no cuadran`] : []),
+        ...(incompletos.length > 0 ? [`${incompletos.length} con información incompleta`] : []),
+      ];
+      const asunto = partesAsunto.length > 0
+        ? `⚠️ Cierre ${branch} ${fecha}: ${partesAsunto.join(" · ")}`
         : `✅ Cierre ${branch} ${fecha}: todo cuadra`;
 
       const td = `padding:6px 8px;border-bottom:1px solid #f1f5f9;`;
       const recibidoCell = (p: OperationsProductRow) => {
-        if (!p.recibido) return "";
+        if (!p.recibido && !p.recibidoSinOk) return "";
         const sinOk = p.recibidoSinOk > 0
           ? ` <span style="color:#d97706;font-size:10px;font-weight:bold;">⚠ ${p.recibidoSinOk} sin OK</span>`
           : "";
@@ -358,6 +363,7 @@ export class OperationsReportService {
         <tr>
           <td style="${td}">${p.name}${p.categoria ? ` <span style="font-size:10px;color:#7c3aed;">(${p.categoria})</span>` : ""}</td>
           <td align="center" style="${td}">${p.inicial ?? "—"}</td>
+          <td align="center" style="${td}">${p.pedidoAnterior ?? "—"}</td>
           <td align="center" style="${td}">${recibidoCell(p)}</td>
           <td align="center" style="${td}">${p.vendido ?? "—"}</td>
           <td align="center" style="${td}">${p.bajas || ""}</td>
@@ -373,6 +379,13 @@ export class OperationsReportService {
            </ul>`
         : `<p style="margin:16px 0 0;color:#16a34a;font-size:13px;">Sin bajas reportadas.</p>`;
 
+      const incompletosHtml = incompletos.length
+        ? `<p style="margin:16px 0 6px;font-weight:bold;color:#92400e;">Información incompleta, no se calculó (${incompletos.length}):</p>
+           <ul style="margin:0;padding-left:18px;color:#374151;font-size:13px;">
+             ${incompletos.map((p) => `<li><strong>${p.name}</strong> — ${p.motivosIncompleto.join("; ")}</li>`).join("")}
+           </ul>`
+        : "";
+
       const html = `
 <div style="font-family:Arial,Helvetica,sans-serif;max-width:640px;margin:0 auto;background:#ffffff;border-radius:14px;border:1px solid #e5e7eb;padding:28px;">
   <h2 style="margin:0 0 4px;color:#7c3aed;">Cierre de ${branch} — ${fecha}</h2>
@@ -381,6 +394,7 @@ export class OperationsReportService {
     <tr style="background:#f8fafc;color:#475569;">
       <th align="left" style="padding:8px 8px;">Producto</th>
       <th style="padding:8px 8px;">Stock inicial</th>
+      <th style="padding:8px 8px;" title="Pedido en el cierre de la jornada anterior">Pedido</th>
       <th style="padding:8px 8px;">Recibido</th>
       <th style="padding:8px 8px;" title="Isla + combos + Casa Mía + Dela Cream">Vendido</th>
       <th style="padding:8px 8px;">Bajas</th>
@@ -388,18 +402,19 @@ export class OperationsReportService {
       <th style="padding:8px 8px;">Quedó (isla)</th>
       <th style="padding:8px 8px;">Diferencia</th>
     </tr>
-    ${(descuadres.length > 0 ? descuadres : report.products.slice(0, 15)).map(fila).join("")}
+    ${(descuadres.length > 0 ? descuadres : report.products.filter((p) => p.motivosIncompleto.length === 0).slice(0, 15)).map(fila).join("")}
   </table>
   <p style="margin:14px 0 0;color:#374151;font-size:13px;">
     Totales: vendido <strong>${report.totals.vendido}</strong> · bajas <strong>${report.totals.bajas}</strong> ·
     descuadre <strong style="color:${report.totals.descuadre !== 0 ? "#dc2626" : "#16a34a"};">${report.totals.descuadre > 0 ? `+${report.totals.descuadre}` : report.totals.descuadre}</strong>
     <span style="color:#9ca3af;">(negativo = falta producto; positivo = sobra)</span>
   </p>
+  ${incompletosHtml}
   ${bajasHtml}
   ${report.sinOkTotal > 0 ? `
   <p style="margin:14px 0 0;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:8px 12px;color:#92400e;font-size:12px;">
     ⚠ <strong>${report.sinOkTotal} unidades</strong> fueron despachadas por producción pero la isla
-    <strong>no dio el OK</strong> en Recepción Masiva. Se cuentan igual, pero pide que confirmen la recepción.
+    <strong>no dio el OK</strong> en Recepción Masiva. No se cuentan y esos productos salen como información incompleta.
   </p>` : ""}
   <p style="margin:18px 0 0;font-size:12px;color:#9ca3af;">Detalle completo en app.nicole.com.ec → Reporte de Operaciones.</p>
 </div>`;
