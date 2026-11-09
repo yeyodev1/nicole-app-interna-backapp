@@ -3,7 +3,7 @@ import { HttpStatusCode } from "axios";
 import { POSService } from "../services/pos.service";
 import { POSRestockService } from "../services/pos-restock.service";
 import { OperationsReportService } from "../services/operations-report.service";
-import { getECDateRange, getEcuadorNow } from "../utils/date.utils";
+import { getECDateRange, getEcuadorNow, getOperationalDateStr } from "../utils/date.utils";
 
 const posService = new POSService();
 const posRestockService = new POSRestockService();
@@ -294,9 +294,11 @@ export async function getOperationsReport(req: Request, res: Response): Promise<
  */
 export async function submitRestockDailyEntry(req: Request, res: Response): Promise<void> {
   try {
-    const { branch, date, submittedBy, items } = req.body;
-    if (!branch || !date || !submittedBy || !Array.isArray(items)) {
-      res.status(HttpStatusCode.BadRequest).send({ message: "branch, date, submittedBy, and items[] are required." });
+    const { branch, submittedBy, items } = req.body;
+    // La fecha del cierre la define siempre el servidor (jornada operativa).
+    const date = getOperationalDateStr();
+    if (!branch || !submittedBy || !Array.isArray(items)) {
+      res.status(HttpStatusCode.BadRequest).send({ message: "branch, submittedBy, and items[] are required." });
       return;
     }
     const requestedByUserId = (req as any).user?.id || (req as any).user?._id;

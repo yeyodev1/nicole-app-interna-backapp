@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 import { models } from "../models";
-import { getEcuadorNow } from "../utils/date.utils";
+import { getEcuadorNow, getOperationalDateStr } from "../utils/date.utils";
 import { IPOSStockObjective, WeeklyObjectives } from "../models/pos-stock-objective.model";
 import { IPOSDailyEntry } from "../models/pos-daily-entry.model";
 import { ContificoService } from "./contifico.service";
@@ -77,7 +77,9 @@ export class POSRestockService {
 
     // Hoy cambia cada rato (5 min); un día pasado casi no cambia (6 h).
     const ecTodayStr = getEcuadorNow().toISOString().split("T")[0];
-    const mongoTtl = dateStr === ecTodayStr ? 5 * 60 * 1000 : 6 * 3600 * 1000;
+    // La jornada abierta puede ser la de ayer entre las 00:00 y las 05:59.
+    const jornadaAbierta = dateStr === ecTodayStr || dateStr === getOperationalDateStr();
+    const mongoTtl = jornadaAbierta ? 5 * 60 * 1000 : 6 * 3600 * 1000;
     const cacheCol = mongoose.connection.collection("contifico_sales_cache");
 
     try {
@@ -182,8 +184,7 @@ export class POSRestockService {
    * bloquea por esto.
    */
   async getDailySales(branch: string, dateStr?: string) {
-    const ecNow = getEcuadorNow();
-    const date = dateStr || ecNow.toISOString().split("T")[0];
+    const date = dateStr || getOperationalDateStr();
     const empty = { branch, date, available: false, puntos: [] as string[], products: {} as Record<string, number> };
 
     try {
@@ -277,8 +278,7 @@ export class POSRestockService {
    * - Lists upcoming future orders (informational only)
    */
   async getDailyForm(branch: string, dateStr?: string) {
-    const ecNow = getEcuadorNow();
-    const formDateStr = dateStr || ecNow.toISOString().split("T")[0];
+    const formDateStr = dateStr || getOperationalDateStr();
     const formDate = parseDateStr(formDateStr);
 
     const targetDate = new Date(formDate);
