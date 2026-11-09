@@ -1,9 +1,19 @@
 import { ContificoService } from "../services/contifico.service";
 import { normalizeString } from "./string.utils";
 
+/** Nombres de la app que en Contífico se llaman distinto (confirmado por Gerencia, 09/11/2026). */
+const NOMBRES_APP_CONTIFICO: Array<[string, string]> = [
+  ["Tarta de Queso porcion", "Tarta de Queso al Estilo Vasco"],
+  ["Cuatro Leches porcion", "4 Leches porcion"],
+  ["Cookies Avena x3", "Galletas de Avena (x3)"],
+  ["Cookies Chocochip x3", "Galletas Chocochip (x3)"],
+  ["Mini Tarta Tiramisu", "Mini Vasca de Tiramisú"],
+];
+
 export interface CategoryMaps {
   byId: Map<string, string>;
   byName: Map<string, string>;
+  codeByName: Map<string, string>; // código de Contífico por nombre normalizado
 }
 
 /**
@@ -21,6 +31,7 @@ export interface CategoryMaps {
 export async function buildContificoCategoryMaps(svc: ContificoService): Promise<CategoryMaps> {
   const byId = new Map<string, string>();
   const byName = new Map<string, string>();
+  const codeByName = new Map<string, string>();
   try {
     const [products, categories] = await Promise.all([
       svc.getCachedProducts(),
@@ -48,9 +59,17 @@ export async function buildContificoCategoryMaps(svc: ContificoService): Promise
       if (!nombre) continue;
       if (p.id) byId.set(p.id, nombre);
       if (p.nombre) byName.set(normalizeString(p.nombre), nombre);
+      if (p.nombre && p.codigo) codeByName.set(normalizeString(p.nombre), p.codigo);
+    }
+
+    for (const [nombreApp, nombreContifico] of NOMBRES_APP_CONTIFICO) {
+      const categoria = byName.get(normalizeString(nombreContifico));
+      const codigo = codeByName.get(normalizeString(nombreContifico));
+      if (categoria) byName.set(normalizeString(nombreApp), categoria);
+      if (codigo) codeByName.set(normalizeString(nombreApp), codigo);
     }
   } catch (err: any) {
     console.warn(`⚠️ [${svc.source}] No se pudieron leer las categorías de Contífico: ${err?.message || err}`);
   }
-  return { byId, byName };
+  return { byId, byName, codeByName };
 }

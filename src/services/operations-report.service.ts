@@ -11,6 +11,7 @@ const FROM_ADDRESS = process.env.EMAIL_FROM || "Nicole Pastry Arts <app@nicole.c
 export interface OperationsProductRow {
   name: string;
   categoria: string | null; // tal cual Contífico (subcategorías de "Producto Venta")
+  codigo: string | null; // código de Contífico: ordena Detalle del Día
   inicial: number | null; // con cuánto empezó el día (cierre anterior)
   recibido: number; // solo lo confirmado por la isla en Recepción Masiva
   recibidoOk: number; // confirmado en Recepción Masiva (el OK)
@@ -239,6 +240,7 @@ export class OperationsReportService {
         row = {
           name,
           categoria: categoryMaps.byName.get(key) || null,
+          codigo: categoryMaps.codeByName.get(key) || null,
           inicial: null,
           recibido: disp.ok,
           recibidoOk: disp.ok,
