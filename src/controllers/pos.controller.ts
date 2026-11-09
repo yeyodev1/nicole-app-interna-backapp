@@ -294,7 +294,7 @@ export async function getOperationsReport(req: Request, res: Response): Promise<
  */
 export async function submitRestockDailyEntry(req: Request, res: Response): Promise<void> {
   try {
-    const { branch, submittedBy, items } = req.body;
+    const { branch, submittedBy, items, notasCreditoCajera } = req.body;
     // La fecha del cierre la define siempre el servidor (jornada operativa).
     const date = getOperationalDateStr();
     if (!branch || !submittedBy || !Array.isArray(items)) {
@@ -302,7 +302,10 @@ export async function submitRestockDailyEntry(req: Request, res: Response): Prom
       return;
     }
     const requestedByUserId = (req as any).user?.id || (req as any).user?._id;
-    const data = await posRestockService.submitDailyEntry(branch, date, items, submittedBy, requestedByUserId);
+    const data = await posRestockService.submitDailyEntry(
+      branch, date, items, submittedBy, requestedByUserId,
+      Array.isArray(notasCreditoCajera) ? notasCreditoCajera : []
+    );
 
     // Alerta a los Jefes de Operaciones (correo vía Resend). Se espera aquí
     // porque en serverless el proceso muere al responder, pero nunca bloquea:

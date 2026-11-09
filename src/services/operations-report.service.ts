@@ -39,6 +39,10 @@ export interface OperationsBranchReport {
   totals: { vendido: number; ventaCierre: number; bajas: number; recibido: number; descuadre: number };
   products: OperationsProductRow[];
   losses: Array<{ productName: string; quantity: number; reason: string; category: string }>;
+  notasCredito: {
+    contifico: Array<{ fecha: string; numero: string; total: number; cliente: string | null }>;
+    cajera: Array<{ fecha: string; factura: string; monto: number; motivo: string }>;
+  };
 }
 
 /**
@@ -173,6 +177,7 @@ export class OperationsReportService {
     // Venta de la isla en Contífico acumulada en el rango (caché Mongo por día).
     let salesAvailable = false;
     const salesTotals: Record<string, number> = {};
+    const notasContifico: OperationsBranchReport["notasCredito"]["contifico"] = [];
     const add = (acc: Record<string, number>, products: Record<string, number>) => {
       for (const [name, qty] of Object.entries(products)) acc[name] = (acc[name] || 0) + qty;
     };
@@ -181,11 +186,28 @@ export class OperationsReportService {
       if (!daySales.available) continue;
       salesAvailable = true;
       add(salesTotals, daySales.products);
+      notasContifico.push(...daySales.notasCredito.map((n) => ({ ...n, fecha: day })));
     }
     const sales = { available: salesAvailable, products: salesTotals };
     const firstDay = days[0];
     const lastDay = days[days.length - 1];
     const bKey = normalizeString(branch);
+
+    const cierresNotas = (await models.posDailyEntries
+      .find({
+        branch: new RegExp(`^${branch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"),
+        date: { $gte: new Date(`${firstDay}T00:00:00.000Z`), $lte: new Date(`${lastDay}T23:59:59.999Z`) },
+      })
+      .select("date notasCreditoCajera")
+      .lean()) as any[];
+    const notasCajera = cierresNotas.flatMap((e) =>
+      (e.notasCreditoCajera || []).map((n: any) => ({
+        fecha: new Date(e.date).toISOString().split("T")[0],
+        factura: n.factura,
+        monto: n.monto,
+        motivo: n.motivo,
+      }))
+    );
 
     // Suministros manuales (isGeneral): llegan por despacho pero no se venden
     // en caja — sin esto aparecían como "faltantes" gigantes falsos.
@@ -315,7 +337,10 @@ export class OperationsReportService {
     );
 
     const sinOkTotal = products.reduce((s, p) => s + p.recibidoSinOk, 0);
-    return { branch, salesAvailable: sales.available, hasClosing: rows.length > 0, sinOkTotal, totals, products, losses };
+    return {
+      branch, salesAvailable: sales.available, hasClosing: rows.length > 0, sinOkTotal, totals, products, losses,
+      notasCredito: { contifico: notasContifico, cajera: notasCajera },
+    };
   }
 
   /**
@@ -379,6 +404,19 @@ export class OperationsReportService {
            </ul>`
         : `<p style="margin:16px 0 0;color:#16a34a;font-size:13px;">Sin bajas reportadas.</p>`;
 
+      const { contifico: ncContifico, cajera: ncCajera } = report.notasCredito;
+      const notasCreditoHtml = ncContifico.length || ncCajera.length
+        ? `<p style="margin:16px 0 6px;font-weight:bold;color:#374151;">Notas de crédito (no se restan de lo vendido):</p>
+           ${ncContifico.length ? `<p style="margin:4px 0;color:#6b7280;font-size:12px;">Contífico</p>
+           <ul style="margin:0;padding-left:18px;color:#374151;font-size:13px;">
+             ${ncContifico.map((n) => `<li>${n.numero} · $${n.total.toFixed(2)}${n.cliente ? ` · ${n.cliente}` : ""}</li>`).join("")}
+           </ul>` : ""}
+           ${ncCajera.length ? `<p style="margin:8px 0 4px;color:#6b7280;font-size:12px;">Reportadas por la cajera</p>
+           <ul style="margin:0;padding-left:18px;color:#374151;font-size:13px;">
+             ${ncCajera.map((n) => `<li>Factura ${n.factura} · $${n.monto.toFixed(2)} · ${n.motivo}</li>`).join("")}
+           </ul>` : ""}`
+        : "";
+
       const incompletosHtml = incompletos.length
         ? `<p style="margin:16px 0 6px;font-weight:bold;color:#92400e;">Información incompleta, no se calculó (${incompletos.length}):</p>
            <ul style="margin:0;padding-left:18px;color:#374151;font-size:13px;">
@@ -416,6 +454,7 @@ export class OperationsReportService {
     ⚠ <strong>${report.sinOkTotal} unidades</strong> fueron despachadas por producción pero la isla
     <strong>no dio el OK</strong> en Recepción Masiva. No se cuentan y esos productos salen como información incompleta.
   </p>` : ""}
+  ${notasCreditoHtml}
   <p style="margin:18px 0 0;font-size:12px;color:#9ca3af;">Detalle completo en app.nicole.com.ec → Reporte de Operaciones.</p>
 </div>`;
 

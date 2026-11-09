@@ -33,9 +33,16 @@ function toDateStr(date: Date): string {
   return date.toISOString().split("T")[0];
 }
 
+export interface PosCreditNote {
+  numero: string;
+  total: number;
+  cliente: string | null;
+}
+
 interface PosSalesAgg {
   byProductId: Map<string, number>;
   byProductName: Map<string, number>;
+  creditNotes: PosCreditNote[];
 }
 
 export class POSRestockService {
@@ -117,12 +124,20 @@ export class POSRestockService {
         if (id) seenIds.add(id);
         nuevos++;
 
-        if (doc.anulado || doc.tipo_documento !== "FAC" || !doc.pos) continue;
+        if (doc.anulado || !doc.pos || !["FAC", "NCT"].includes(doc.tipo_documento)) continue;
 
         let agg = byPos.get(doc.pos);
         if (!agg) {
-          agg = { byProductId: new Map(), byProductName: new Map() };
+          agg = { byProductId: new Map(), byProductName: new Map(), creditNotes: [] };
           byPos.set(doc.pos, agg);
+        }
+        if (doc.tipo_documento === "NCT") {
+          agg.creditNotes.push({
+            numero: String(doc.documento || ""),
+            total: parseFloat(doc.total || "0"),
+            cliente: doc.persona?.razon_social || null,
+          });
+          continue;
         }
         for (const det of doc.detalles || []) {
           const qty = parseFloat(det.cantidad || "0");
@@ -155,12 +170,13 @@ export class POSRestockService {
     return byPos;
   }
 
-  private serializeByPos(byPos: Map<string, PosSalesAgg>): Record<string, { byId: Record<string, number>; byName: Record<string, number> }> {
-    const out: Record<string, { byId: Record<string, number>; byName: Record<string, number> }> = {};
+  private serializeByPos(byPos: Map<string, PosSalesAgg>): Record<string, { byId: Record<string, number>; byName: Record<string, number>; creditNotes: PosCreditNote[] }> {
+    const out: Record<string, { byId: Record<string, number>; byName: Record<string, number>; creditNotes: PosCreditNote[] }> = {};
     for (const [pos, agg] of byPos) {
       out[pos] = {
         byId: Object.fromEntries(agg.byProductId),
         byName: Object.fromEntries(agg.byProductName),
+        creditNotes: agg.creditNotes,
       };
     }
     return out;
@@ -172,6 +188,7 @@ export class POSRestockService {
       byPos.set(pos, {
         byProductId: new Map(Object.entries((agg as any).byId || {})),
         byProductName: new Map(Object.entries((agg as any).byName || {})),
+        creditNotes: (agg as any).creditNotes || [],
       });
     }
     return byPos;
@@ -185,7 +202,7 @@ export class POSRestockService {
    */
   async getDailySales(branch: string, dateStr?: string) {
     const date = dateStr || getOperationalDateStr();
-    const empty = { branch, date, available: false, puntos: [] as string[], products: {} as Record<string, number> };
+    const empty = { branch, date, available: false, puntos: [] as string[], products: {} as Record<string, number>, notasCredito: [] as PosCreditNote[] };
 
     try {
       const puntosEmision = await this.getPuntosEmisionCached();
@@ -228,6 +245,7 @@ export class POSRestockService {
         available: true,
         puntos: targets.map((p: any) => `${codeOf(p)} ${p.direccion || p.nombre || ""}`.trim()),
         products: sumFor(targets),
+        notasCredito: targets.flatMap((t: any) => byPos.get(t.id)?.creditNotes || []),
       };
     } catch (err: any) {
       console.warn(`⚠️ [POS] No se pudo leer la venta de ${branch} (${date}) en Contífico: ${err?.message || err}`);
@@ -438,7 +456,8 @@ export class POSRestockService {
       }>;
     }>,
     submittedBy: string,
-    requestedByUserId?: string
+    requestedByUserId?: string,
+    notasCreditoCajera: Array<{ factura: string; monto: number; motivo: string }> = []
   ): Promise<IPOSDailyEntry> {
     const date = parseDateStr(dateStr);
 
@@ -522,6 +541,9 @@ export class POSRestockService {
           submittedBy,
           submittedAt: new Date(),
           items: processedItems,
+          notasCreditoCajera: notasCreditoCajera
+            .map((n) => ({ factura: String(n.factura || "").trim(), monto: Number(n.monto) || 0, motivo: String(n.motivo || "").trim() }))
+            .filter((n) => n.factura && n.monto > 0 && n.motivo),
           status: "submitted",
         },
       },

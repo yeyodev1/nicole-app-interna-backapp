@@ -24,6 +24,7 @@ export interface IPOSDailyEntry extends Document {
   submittedBy: string;
   submittedAt: Date;
   items: IPOSDailyEntryItem[];
+  notasCreditoCajera?: Array<{ factura: string; monto: number; motivo: string }>;
   status: "draft" | "submitted";
 }
 
@@ -58,6 +59,14 @@ const POSDailyEntrySchema = new Schema<IPOSDailyEntry>(
     submittedBy: { type: String, required: true },
     submittedAt: { type: Date, default: Date.now },
     items: [POSDailyEntryItemSchema],
+    notasCreditoCajera: [
+      {
+        factura: { type: String, required: true },
+        monto: { type: Number, required: true },
+        motivo: { type: String, required: true },
+        _id: false,
+      },
+    ],
     status: { type: String, enum: ["draft", "submitted"], default: "submitted" },
   },
   { timestamps: true }
