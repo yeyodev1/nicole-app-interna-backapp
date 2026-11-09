@@ -12,7 +12,7 @@ export interface OperationsProductRow {
   name: string;
   categoria: string | null; // tal cual Contífico (subcategorías de "Producto Venta")
   inicial: number | null; // con cuánto empezó el día (cierre anterior)
-  recibido: number; // total que le llegó (confirmado + despachado sin OK)
+  recibido: number; // solo lo confirmado por la isla en Recepción Masiva
   recibidoOk: number; // confirmado en Recepción Masiva (el OK)
   recibidoSinOk: number; // despachado por producción pero SIN el OK de la isla
   // Todo lo que salió vendido: isla + combos + Casa Mía + Dela Crem
@@ -26,6 +26,8 @@ export interface OperationsProductRow {
   descuadre: number | null;
   ventaCierre: number | null; // venta implícita del cierre (dato de apoyo)
   pedidoFinal: number;
+  pedidoAnterior: number | null; // pedido en el cierre de la jornada anterior
+  motivosIncompleto: string[]; // con motivos no se calcula ni entra en totales
 }
 
 export interface OperationsBranchReport {
@@ -216,7 +218,7 @@ export class OperationsReportService {
           name,
           categoria: categoryMaps.byName.get(key) || null,
           inicial: null,
-          recibido: disp.ok + disp.sinOk,
+          recibido: disp.ok,
           recibidoOk: disp.ok,
           recibidoSinOk: disp.sinOk,
           vendido: sales.available ? 0 : null,
@@ -227,6 +229,8 @@ export class OperationsReportService {
           descuadre: null,
           ventaCierre: null,
           pedidoFinal: 0,
+          pedidoAnterior: null,
+          motivosIncompleto: [],
         };
         byName.set(key, row);
       }
@@ -241,8 +245,11 @@ export class OperationsReportService {
       // Rango: inicial del primer día, quedó del último, bajas acumuladas
       if (r.date === firstDay) row.inicial = r.stockInicial ?? null;
       if (r.date === lastDay) {
-        row.quedo = r.stockFinal ?? null;
+        row.quedo = r.stockFinalReportado ?? null;
         row.pedidoFinal = r.pedidoFinal || 0;
+      }
+      if (r.pedidoAnterior !== null && r.pedidoAnterior !== undefined) {
+        row.pedidoAnterior = (row.pedidoAnterior ?? 0) + r.pedidoAnterior;
       }
       row.bajas += r.bajas || 0;
       // Combo, Casa Mía y Dela Cream los escribe la isla en el cierre
@@ -272,8 +279,20 @@ export class OperationsReportService {
       //   Debería quedar = Empezó + Recibido − (isla + combos + Casa Mía + Dela Cream) − Bajas
       //   Quedó (isla)   = lo que la sucursal cuenta en la reposición del día (cierre)
       //   Diferencia     = Quedó − Debería quedar  (negativo = falta producto · positivo = sobra)
-      row.deberiaQuedar = (row.inicial ?? 0) + row.recibido - row.vendido - row.bajas;
-      if (row.quedo !== null) row.descuadre = row.quedo - row.deberiaQuedar;
+      // Regla de Gerencia (09/11/2026): si falta un dato no se calcula ni se asume.
+      const motivos: string[] = [];
+      if (!sales.available) motivos.push("Sin venta de Contífico");
+      if (row.inicial === null) motivos.push("Falta cierre del día anterior o sus excedentes");
+      if (row.recibidoSinOk > 0) motivos.push("Falta OK de recepción");
+      if ((row.pedidoAnterior ?? 0) > 0 && row.recibidoOk + row.recibidoSinOk === 0) {
+        motivos.push("Falta registro de despacho de CDP");
+      }
+      if (row.quedo === null) motivos.push("Excedentes sin reporte");
+      row.motivosIncompleto = motivos;
+      if (motivos.length > 0) continue;
+
+      row.deberiaQuedar = row.inicial! + row.recibido - row.vendido - row.bajas;
+      row.descuadre = row.quedo! - row.deberiaQuedar;
     }
 
     const products = Array.from(byName.values()).sort((a, b) => {
@@ -284,6 +303,7 @@ export class OperationsReportService {
 
     const totals = products.reduce(
       (acc, p) => {
+        if (p.motivosIncompleto.length > 0) return acc;
         acc.vendido += p.vendido ?? 0;
         acc.ventaCierre += p.ventaCierre ?? 0;
         acc.bajas += p.bajas;

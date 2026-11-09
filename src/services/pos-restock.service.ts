@@ -909,6 +909,7 @@ export class POSRestockService {
             stockFinalReportado: item.stockFinal ?? null,
             stockObjectiveTomorrow: item.stockObjectiveTomorrow ?? 0,
             pedidoFinal: item.pedidoFinal ?? 0,
+            pedidoAnterior: prevItem ? (prevItem.pedidoFinal ?? 0) : null,
             // Sin cierre previo, el recibido es el punto de partida.
             ventaImplicita: (stockInicial ?? 0) + recibido - bajas - stockFinal,
             submittedBy: entry.submittedBy,
