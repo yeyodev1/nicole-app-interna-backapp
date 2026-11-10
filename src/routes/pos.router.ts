@@ -16,6 +16,8 @@ import {
   settleOrder,
   getInitialInventory,
   saveInitialInventory,
+  getAnomalyNotes,
+  saveAnomalyNote,
 } from "../controllers/pos.controller";
 import { authMiddleware } from "../middlewares/auth.middleware";
 
@@ -46,6 +48,10 @@ router.get("/restock/operations-report", getOperationsReport);
 router.post("/restock/daily-entry", submitRestockDailyEntry);
 router.get("/restock/history", getRestockHistory);
 router.get("/restock/leftovers", getRestockLeftovers);
+
+// Comentarios de anomalías del Detalle del Día (Orden 2)
+router.get("/restock/anomaly-notes", getAnomalyNotes);
+router.put("/restock/anomaly-notes", saveAnomalyNote);
 
 // Inventario inicial por sucursal y día (Operaciones)
 router.get("/initial-inventory", getInitialInventory);

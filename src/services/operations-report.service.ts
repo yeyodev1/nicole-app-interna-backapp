@@ -3,7 +3,7 @@ import { models } from "../models";
 import { POSRestockService } from "./pos-restock.service";
 import { ContificoService } from "./contifico.service";
 import { normalizeString } from "../utils/string.utils";
-import { buildContificoCategoryMaps, CategoryMaps } from "../utils/contifico-categorias.util";
+import { buildContificoCategoryMaps, CategoryMaps, resolveProduct } from "../utils/contifico-categorias.util";
 import { receptionDayOf, receptionCandidatesQuery } from "../utils/reception-day.util";
 
 const FROM_ADDRESS = process.env.EMAIL_FROM || "Nicole Pastry Arts <app@nicole.com.ec>";
@@ -193,6 +193,23 @@ export class OperationsReportService {
     const firstDay = days[0];
     const lastDay = days[days.length - 1];
     const bKey = normalizeString(branch);
+    // Orden 8: un renglón por código de Contífico (sin código, por nombre normalizado).
+    // Se aplica al leer: los cierres guardados no se reescriben.
+    const pk = (name: string) => {
+      const c = categoryMaps.codeByName.get(normalizeString(name));
+      return c ? `#${c}` : normalizeString(name);
+    };
+    const dispMine = new Map<string, { ok: number; sinOk: number }>();
+    for (const [k, v] of dispatchMap) {
+      const i = k.indexOf("|");
+      if (k.slice(0, i) !== bKey) continue;
+      const key = pk(k.slice(i + 1));
+      const e = dispMine.get(key) || { ok: 0, sinOk: 0 };
+      e.ok += v.ok;
+      e.sinOk += v.sinOk;
+      dispMine.set(key, e);
+    }
+    const addN = (a: number | null, b: number | null | undefined) => (b === null || b === undefined ? a : (a ?? 0) + b);
 
     const cierresNotas = (await models.posDailyEntries
       .find({
@@ -217,7 +234,7 @@ export class OperationsReportService {
       .select("productName isGeneral")
       .lean()) as any[];
     const suministros = new Set(
-      objectives.filter((o) => o.isGeneral).map((o) => normalizeString(o.productName))
+      objectives.filter((o) => o.isGeneral).map((o) => pk(o.productName))
     );
 
     const rows = (leftovers.rows as any[]).filter((r) => normalizeString(r.branch) === bKey);
@@ -233,14 +250,15 @@ export class OperationsReportService {
 
     const byName = new Map<string, OperationsProductRow>();
     const getRow = (name: string): OperationsProductRow => {
-      const key = normalizeString(name);
+      const key = pk(name);
       let row = byName.get(key);
       if (!row) {
-        const disp = dispatchMap.get(`${bKey}|${key}`) || { ok: 0, sinOk: 0 };
+        const disp = dispMine.get(key) || { ok: 0, sinOk: 0 };
+        const prod = resolveProduct(categoryMaps, name);
         row = {
-          name,
-          categoria: categoryMaps.byName.get(key) || null,
-          codigo: categoryMaps.codeByName.get(key) || null,
+          name: prod.nombre,
+          categoria: prod.categoria,
+          codigo: prod.codigo,
           inicial: null,
           recibido: disp.ok,
           recibidoOk: disp.ok,
@@ -262,15 +280,20 @@ export class OperationsReportService {
     };
 
     if (sales.available) {
-      for (const [name, qty] of Object.entries(sales.products)) getRow(name).ventas.isla = qty;
+      // Dos productos de la isla con el mismo código reciben la misma venta: se toma una sola vez
+      for (const [name, qty] of Object.entries(sales.products)) {
+        const row = getRow(name);
+        row.ventas.isla = Math.max(row.ventas.isla, qty);
+      }
     }
     for (const r of rows) {
       const row = getRow(r.productName);
       // Rango: inicial del primer día, quedó del último, bajas acumuladas
-      if (r.date === firstDay) row.inicial = r.stockInicial ?? null;
+      // Varios nombres del mismo código el mismo día se suman
+      if (r.date === firstDay) row.inicial = addN(row.inicial, r.stockInicial);
       if (r.date === lastDay) {
-        row.quedo = r.stockFinalReportado ?? null;
-        row.pedidoFinal = r.pedidoFinal || 0;
+        row.quedo = addN(row.quedo, r.stockFinalReportado);
+        row.pedidoFinal += r.pedidoFinal || 0;
       }
       if (r.pedidoAnterior !== null && r.pedidoAnterior !== undefined) {
         row.pedidoAnterior = (row.pedidoAnterior ?? 0) + r.pedidoAnterior;
@@ -285,7 +308,13 @@ export class OperationsReportService {
     // Inventario inicial cargado por Operaciones para el primer día: es el "empezó",
     // aunque la sucursal todavía no haya hecho el cierre de ese día.
     const initialItems = await this.posRestock.initialItemsFor(branch, firstDay);
-    for (const it of initialItems) getRow(it.productName).inicial = it.quantity;
+    const initialByKey = new Map<string, { name: string; qty: number }>();
+    for (const it of initialItems) {
+      const e = initialByKey.get(pk(it.productName)) || { name: it.productName, qty: 0 };
+      e.qty += it.quantity;
+      initialByKey.set(pk(it.productName), e);
+    }
+    for (const { name, qty } of initialByKey.values()) getRow(name).inicial = qty;
 
     for (const [key, row] of byName) {
       // Vendido = isla (Contífico; 0 si ese día aún no hay ventas) + combo o fuera de isla.

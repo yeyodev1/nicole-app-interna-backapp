@@ -84,6 +84,7 @@ export async function registerDispatchOrder(req: Request, res: Response) {
     const result = await productionService.registerDispatch(id, req.body);
     res.status(HttpStatusCode.Ok).send({ message: "Dispatch reported successfully.", data: result });
   } catch (error: any) {
+    if (error.status === 400) return res.status(HttpStatusCode.BadRequest).send({ message: error.message, error: error.message });
     res.status(HttpStatusCode.InternalServerError).send({ message: "Failed", error: error.message });
   }
 }
@@ -143,6 +144,7 @@ export async function editDispatchOrder(req: Request, res: Response) {
     const result = await productionService.updateDispatch(id, dispatchId, req.body);
     res.status(HttpStatusCode.Ok).send({ message: "Dispatch updated successfully.", data: result });
   } catch (error: any) {
+    if (error.status === 400) return res.status(HttpStatusCode.BadRequest).send({ message: error.message, error: error.message });
     const status = error.message.includes("Edit window") ? HttpStatusCode.Forbidden : HttpStatusCode.InternalServerError;
     res.status(status).send({ message: "Failed", error: error.message });
   }

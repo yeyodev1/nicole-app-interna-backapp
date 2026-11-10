@@ -6,7 +6,7 @@ import { IPOSDailyEntry } from "../models/pos-daily-entry.model";
 import { ContificoService } from "./contifico.service";
 import { getBranchPuntoCodes } from "../config/contifico-pos.config";
 import { normalizeString } from "../utils/string.utils";
-import { buildContificoCategoryMaps } from "../utils/contifico-categorias.util";
+import { buildContificoCategoryMaps, resolveProduct } from "../utils/contifico-categorias.util";
 import { receptionDayOf, receptionCandidatesQuery } from "../utils/reception-day.util";
 import { NOT_DISCARDED } from "../utils/reserva";
 
@@ -373,6 +373,8 @@ export class POSRestockService {
 
       return {
         productName: obj.productName,
+        // Orden 8: nombre que se muestra en la isla = el de Contífico (productName sigue siendo la llave del cierre)
+        contificoName: obj.isGeneral ? obj.productName : resolveProduct(categoryMaps, obj.productName, obj.contificoId).nombre,
         unit: obj.unit,
         isGeneral: obj.isGeneral || false,
         requiresMinimum: obj.requiresMinimum || false,
@@ -457,6 +459,10 @@ export class POSRestockService {
     requestedByUserId?: string,
     notasCreditoCajera: Array<{ factura: string; monto: number; motivo: string }> = []
   ): Promise<IPOSDailyEntry> {
+    // Orden 1: el cierre se guarda con el nombre oficial de branches; si no existe, como llega.
+    const officialBranch: any = await models.branches.findOne({ name: branchMatch(branch.trim()) }).lean();
+    if (officialBranch) branch = officialBranch.name;
+
     const date = parseDateStr(dateStr);
     const entregaDate = new Date(date.getTime() + 24 * 3600000); // reposición: día siguiente al cierre
 
@@ -530,7 +536,7 @@ export class POSRestockService {
     });
 
     const result = await models.posDailyEntries.findOneAndUpdate(
-      { branch, date },
+      { branch: branchMatch(branch), date },
       {
         $set: {
           branch,
@@ -847,6 +853,7 @@ export class POSRestockService {
       .lean()) as any[];
 
     // Sucursales a considerar: las activas (o la filtrada) + las que ya tienen cierres.
+    const branchKey = (b: string) => b.trim().toLowerCase();
     let branchNames: string[];
     if (allBranches) {
       branchNames = [branch as string];
@@ -857,10 +864,12 @@ export class POSRestockService {
         .lean()) as any[];
       const fromDb = active.map((b) => b.name);
       const fromEntries = entries.map((e) => e.branch);
-      branchNames = Array.from(new Set([...fromDb, ...fromEntries]));
+      // Orden 1: quitar repetidos por branchKey ("Mall del sol" = "Mall del Sol"); gana el nombre de branches.
+      const byKey = new Map<string, string>();
+      for (const n of [...fromDb, ...fromEntries]) if (!byKey.has(branchKey(n))) byKey.set(branchKey(n), n);
+      branchNames = Array.from(byKey.values());
     }
 
-    const branchKey = (b: string) => b.trim().toLowerCase();
     const allowed = new Set(branchNames.map(branchKey));
 
     // Recepciones confirmadas en el rango: dispatch.destination = sucursal.
