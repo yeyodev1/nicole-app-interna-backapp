@@ -3,11 +3,13 @@ import { HttpStatusCode } from "axios";
 import { POSService } from "../services/pos.service";
 import { POSRestockService } from "../services/pos-restock.service";
 import { OperationsReportService } from "../services/operations-report.service";
+import { PosAnomalyNoteService } from "../services/pos-anomaly-note.service";
 import { getECDateRange, getEcuadorNow, getOperationalDateStr } from "../utils/date.utils";
 
 const posService = new POSService();
 const posRestockService = new POSRestockService();
 const operationsReportService = new OperationsReportService();
+const posAnomalyNoteService = new PosAnomalyNoteService();
 
 /**
  * GET /api/pos/dispatches
@@ -456,5 +458,41 @@ export async function saveInitialInventory(req: Request, res: Response): Promise
     }
     console.error("Error guardando inventario inicial:", error);
     res.status(HttpStatusCode.InternalServerError).send({ message: "No se pudo guardar el inventario inicial." });
+  }
+}
+
+/** GET /api/pos/restock/anomaly-notes?from=AAAA-MM-DD&to=AAAA-MM-DD (Orden 2) */
+export async function getAnomalyNotes(req: Request, res: Response): Promise<void> {
+  try {
+    const from = String(req.query.from || "");
+    const to = String(req.query.to || from);
+    res.status(HttpStatusCode.Ok).send({ data: await posAnomalyNoteService.list(from, to) });
+  } catch (error: any) {
+    if (error?.status === 400) {
+      res.status(HttpStatusCode.BadRequest).send({ message: error.message });
+      return;
+    }
+    console.error("Error leyendo comentarios de anomalías:", error);
+    res.status(HttpStatusCode.InternalServerError).send({ message: "No se pudieron leer los comentarios." });
+  }
+}
+
+/** PUT /api/pos/restock/anomaly-notes  Body: { branch, date, productName, descuadre, comment } (Orden 2) */
+export async function saveAnomalyNote(req: Request, res: Response): Promise<void> {
+  try {
+    if (!canEditInitialInventory(req)) {
+      res.status(HttpStatusCode.Forbidden).send({ message: "Solo Operaciones puede comentar anomalías." });
+      return;
+    }
+    const user = (req as any).user?.name || (req as any).user?.email || "Operaciones";
+    const saved = await posAnomalyNoteService.save(req.body || {}, user);
+    res.status(HttpStatusCode.Ok).send({ message: "Comentario guardado.", data: saved });
+  } catch (error: any) {
+    if (error?.status === 400) {
+      res.status(HttpStatusCode.BadRequest).send({ message: error.message });
+      return;
+    }
+    console.error("Error guardando comentario de anomalía:", error);
+    res.status(HttpStatusCode.InternalServerError).send({ message: "No se pudo guardar el comentario." });
   }
 }

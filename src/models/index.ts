@@ -22,11 +22,13 @@ import { NotificationModel } from "./notification.model";
 import { McpUserModel } from "./mcp-user.model";
 import { InitialInventoryModel } from "./initial-inventory.model";
 import { ProductAliasModel } from "./product-alias.model";
+import { PosAnomalyNoteModel } from "./pos-anomaly-note.model";
 
 export const models = {
   mcpUsers: McpUserModel,
   initialInventories: InitialInventoryModel,
   productAliases: ProductAliasModel,
+  posAnomalyNotes: PosAnomalyNoteModel,
   orders: OrderModel,
   dailySummaries: DailySummaryModel,
   users: UserModel,
