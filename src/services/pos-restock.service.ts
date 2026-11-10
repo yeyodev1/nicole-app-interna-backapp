@@ -281,8 +281,11 @@ export class POSRestockService {
     category?: "Producción" | "Bodega";
     objectives: WeeklyObjectives;
   }): Promise<IPOSStockObjective> {
+    // Orden 8: el catálogo se guarda con el nombre oficial de la sucursal ("Mall del sol" → "Mall del Sol")
+    const official: any = await models.branches.findOne({ name: branchMatch(String(data.branch || "").trim()) }).lean();
+    if (official) data = { ...data, branch: official.name };
     const result = await models.posStockObjectives.findOneAndUpdate(
-      { branch: data.branch, productName: data.productName },
+      { branch: branchMatch(data.branch), productName: data.productName },
       { $set: data },
       { upsert: true, new: true }
     );
@@ -872,10 +875,26 @@ export class POSRestockService {
 
     const allowed = new Set(branchNames.map(branchKey));
 
+    // Orden 8: el producto se identifica por código de Contífico, así un cierre guardado con
+    // el nombre viejo sigue enlazando con el del día siguiente (nombre nuevo). Sin código: nombre normalizado.
+    const maps = await this.getContificoCategoryMaps();
+    const pk = (name: string) => {
+      const c = maps.codeByName.get(normalizeString(name || ""));
+      return c ? `#${c}` : normalizeString(name || "");
+    };
+    const rekey = (m: Map<string, number>) => {
+      const out = new Map<string, number>();
+      for (const [k, v] of m) {
+        const i = k.indexOf("|", k.indexOf("|") + 1);
+        const nk = `${k.slice(0, i)}|${pk(k.slice(i + 1))}`;
+        out.set(nk, (out.get(nk) ?? 0) + v);
+      }
+      return out;
+    };
     // Recepciones confirmadas en el rango: dispatch.destination = sucursal.
-    const received = await this.getReceivedByDay(fromDate, toDate);
+    const received = rekey(await this.getReceivedByDay(fromDate, toDate));
     // Inventario inicial registrado por Operaciones: manda sobre el cierre anterior.
-    const initialIndex = await this.initialInventoryIndex(fromDate, toDate);
+    const initialIndex = rekey(await this.initialInventoryIndex(fromDate, toDate));
 
     // Índice de cierres: `${branchKey}|${YYYY-MM-DD}|${producto}` → item
     const entryIndex = new Map<string, any>();
@@ -886,7 +905,7 @@ export class POSRestockService {
       if (!allowed.has(bk)) continue;
       daysWithEntry.add(`${bk}|${dateStr}`);
       for (const item of entry.items || []) {
-        entryIndex.set(`${bk}|${dateStr}|${item.productName}`, { ...item, entry });
+        entryIndex.set(`${bk}|${dateStr}|${pk(item.productName)}`, { ...item, entry });
       }
     }
 
@@ -914,10 +933,10 @@ export class POSRestockService {
         if (!entry) continue;
 
         for (const item of entry.items || []) {
-          const prevItem = entryIndex.get(`${bk}|${prevStr}|${item.productName}`);
-          const initial = initialIndex.get(`${bk}|${dateStr}|${normalizeString(item.productName)}`);
+          const prevItem = entryIndex.get(`${bk}|${prevStr}|${pk(item.productName)}`);
+          const initial = initialIndex.get(`${bk}|${dateStr}|${pk(item.productName)}`);
           const stockInicial = initial !== undefined ? initial : prevItem ? prevItem.stockFinal : null;
-          const recibido = received.get(`${bk}|${dateStr}|${item.productName}`) ?? 0;
+          const recibido = received.get(`${bk}|${dateStr}|${pk(item.productName)}`) ?? 0;
           const bajas = item.bajas ?? 0;
           const stockFinal = item.stockFinal ?? 0;
 
