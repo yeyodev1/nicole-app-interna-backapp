@@ -1,5 +1,6 @@
 import { models } from "../models";
 import { Types } from "mongoose";
+import CustomError from "../errors/customError.error";
 
 export class POSService {
 
@@ -85,6 +86,14 @@ export class POSService {
 
     const dispatch = order.dispatches.find((d: any) => d._id.toString() === dispatchId);
     if (!dispatch) throw new Error("Dispatch not found");
+
+    // Orden 6: no se puede recibir más de lo enviado (menos o 0 con novedad sí)
+    for (const receivedItem of receptionData.items || []) {
+      const sentItem = dispatch.items.find((item: any) => item.productId.toString() === receivedItem.productId);
+      if (sentItem && Number(receivedItem.quantityReceived) > (sentItem.quantitySent || 0)) {
+        throw new CustomError(`${sentItem.name}: no se puede recibir ${receivedItem.quantityReceived}, se enviaron ${sentItem.quantitySent || 0}.`, 400);
+      }
+    }
 
     // Update Dispatch Header
     dispatch.receivedAt = new Date();

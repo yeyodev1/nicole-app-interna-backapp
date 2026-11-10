@@ -88,6 +88,7 @@ export async function confirmReception(req: Request, res: Response) {
     });
   } catch (error: any) {
     console.error("Error confirming reception:", error);
+    if (error.status === 400) return res.status(HttpStatusCode.BadRequest).send({ message: error.message, error: error.message });
     res.status(HttpStatusCode.InternalServerError).send({ message: "Failed to confirm reception.", error: error.message });
   }
 }

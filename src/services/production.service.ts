@@ -1,5 +1,6 @@
 
 import { OrderModel } from "../models/order.model";
+import CustomError from "../errors/customError.error";
 import { getECDateRange, getEcuadorNow } from "../utils/date.utils";
 import { NOT_DISCARDED } from "../utils/reserva";
 
@@ -589,10 +590,8 @@ export class ProductionService {
 
         for (const product of order.products) {
           const sent = sentMap.get(product._id!.toString()) || 0;
-          // El resto eliminado no se despacha: solo se debe lo producido
-          const required = product.productionStatus === "COMPLETED"
-            ? Math.min(product.quantity, product.produced || 0)
-            : product.quantity;
+          // Orden 6: solo se envía lo producido (filas abiertas o cerradas)
+          const required = Math.min(product.quantity, product.produced || 0);
           const remaining = required - sent;
 
           if (remaining > 0) {
@@ -625,9 +624,10 @@ export class ProductionService {
           await order.save();
           successCount++;
         } else {
-          // Already full, maybe just ensure status is SENT
-          if (order.dispatchStatus !== 'SENT') {
-            order.dispatchStatus = 'SENT';
+          // Orden 6: nada por enviar; el estado sale de lo realmente enviado, no se fuerza SENT
+          const before = order.dispatchStatus;
+          this.recalculateDispatchStatus(order);
+          if (order.dispatchStatus !== before) {
             await order.save();
             successCount++; // Count as handled
           }
@@ -648,6 +648,7 @@ export class ProductionService {
   async registerDispatch(orderId: string, dispatchData: { destination: string; items: any[]; notes?: string; reportedBy: string }) {
     const order = await OrderModel.findById(orderId);
     if (!order) throw new Error("Order not found");
+    this.assertWithinProduced(order, dispatchData.items || []);
 
     const newDispatch: any = {
       reportedAt: new Date(),
@@ -698,6 +699,8 @@ export class ProductionService {
     if (diffHours > 1) {
       throw new Error("Edit window expired (1 hour limit).");
     }
+
+    if (updates.items) this.assertWithinProduced(order, updates.items, dispatchId);
 
     // Apply updates
     if (updates.items) dispatch.items = updates.items;
@@ -797,6 +800,28 @@ export class ProductionService {
       byDestination,
       byStatus
     };
+  }
+
+  /**
+   * Orden 6: ningún ítem puede superar lo producido menos lo ya enviado
+   * (sin contar el despacho que se está editando). Lanza 400 con el producto y lo disponible.
+   */
+  private assertWithinProduced(order: any, items: any[], excludeDispatchId?: string) {
+    const sentMap = new Map<string, number>();
+    for (const d of order.dispatches || []) {
+      if (excludeDispatchId && String(d._id) === String(excludeDispatchId)) continue;
+      for (const it of d.items || []) sentMap.set(String(it.productId), (sentMap.get(String(it.productId)) || 0) + (Number(it.quantitySent) || 0));
+    }
+    const asked = new Map<string, number>();
+    for (const it of items) asked.set(String(it.productId), (asked.get(String(it.productId)) || 0) + (Number(it.quantitySent) || 0));
+    for (const [pid, qty] of asked) {
+      const product = (order.products || []).find((p: any) => String(p._id) === pid);
+      if (!product || qty <= 0) continue;
+      const available = Math.max(0, (product.produced || 0) - (sentMap.get(pid) || 0));
+      if (qty > available) {
+        throw new CustomError(`${product.name}: no se puede enviar ${qty}, disponible ${available} (producido menos lo ya enviado).`, 400);
+      }
+    }
   }
 
   private recalculateDispatchStatus(order: any) {
