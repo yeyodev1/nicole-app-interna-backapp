@@ -6,7 +6,7 @@ import { IPOSDailyEntry } from "../models/pos-daily-entry.model";
 import { ContificoService } from "./contifico.service";
 import { getBranchPuntoCodes } from "../config/contifico-pos.config";
 import { normalizeString } from "../utils/string.utils";
-import { buildContificoCategoryMaps } from "../utils/contifico-categorias.util";
+import { buildContificoCategoryMaps, resolveProduct } from "../utils/contifico-categorias.util";
 import { receptionDayOf, receptionCandidatesQuery } from "../utils/reception-day.util";
 import { NOT_DISCARDED } from "../utils/reserva";
 
@@ -373,6 +373,8 @@ export class POSRestockService {
 
       return {
         productName: obj.productName,
+        // Orden 8: nombre que se muestra en la isla = el de Contífico (productName sigue siendo la llave del cierre)
+        contificoName: obj.isGeneral ? obj.productName : resolveProduct(categoryMaps, obj.productName, obj.contificoId).nombre,
         unit: obj.unit,
         isGeneral: obj.isGeneral || false,
         requiresMinimum: obj.requiresMinimum || false,
