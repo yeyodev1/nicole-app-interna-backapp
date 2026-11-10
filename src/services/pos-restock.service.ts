@@ -458,10 +458,11 @@ export class POSRestockService {
     notasCreditoCajera: Array<{ factura: string; monto: number; motivo: string }> = []
   ): Promise<IPOSDailyEntry> {
     const date = parseDateStr(dateStr);
+    const entregaDate = new Date(date.getTime() + 24 * 3600000); // reposición: día siguiente al cierre
 
     // targetDate solo se usa para el objetivo de stock (día siguiente). El pedido
-    // de reposición nace fechado el MISMO día del cierre: cocina y recepción lo
-    // ven al instante (ciclo completo sin esperar al día siguiente).
+    // de reposición guarda dos fechas: orderDate = día del cierre (cuándo se pidió)
+    // y deliveryDate = día siguiente (CDP produce de madrugada y despacha ~10:00).
     const targetDate = new Date(date);
     targetDate.setUTCDate(targetDate.getUTCDate() + 1);
     const targetDow = targetDate.getUTCDay();
@@ -598,7 +599,7 @@ export class POSRestockService {
 
           const restockOrderData = {
             branch,
-            deliveryDate: date,
+            deliveryDate: entregaDate,
             orderDate: date,
             customerName: `${customerNamePrefix}: ${branch}`,
             customerPhone: "N/A",
@@ -643,7 +644,7 @@ export class POSRestockService {
         } else {
           const restockOrderData = {
             branch,
-            deliveryDate: date,
+            deliveryDate: entregaDate,
             orderDate: date,
             customerName: `${customerNamePrefix}: ${branch}`,
             customerPhone: "N/A",
