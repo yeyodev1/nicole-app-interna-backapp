@@ -52,6 +52,11 @@ const POSStockObjectiveSchema = new Schema<IPOSStockObjective>(
 );
 
 POSStockObjectiveSchema.index({ branch: 1, productName: 1 }, { unique: true });
+// Orden 8: un solo producto por código de Contífico en cada isla
+POSStockObjectiveSchema.index(
+  { branch: 1, contificoId: 1 },
+  { unique: true, partialFilterExpression: { contificoId: { $type: "string" } } }
+);
 
 export const POSStockObjectiveModel = model<IPOSStockObjective>(
   "POSStockObjective",
