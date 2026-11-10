@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { getProductionTasks, updateProductionTask, getItemsSummary, batchUpdateProductionTasks, registerProgress, updateItemStatus, getAllProductionOrders, registerDispatchOrder, editDispatchOrder, getProductionReports, batchRegisterDispatchOrder, registerDispatchProgress, voidOrder, restoreOrder, revertOrder, returnOrder, batchRegisterProgress } from "../controllers/production.controller";
 import { authMiddleware } from "../middlewares/auth.middleware";
+import { getFutureSales } from "../controllers/future-sales.controller";
 
 const productionRouter = Router();
 
@@ -10,6 +11,7 @@ productionRouter.post("/dispatch/batch", batchRegisterDispatchOrder); // New bat
 productionRouter.get("/reports", getProductionReports); // New reports endpoint
 productionRouter.get("/all-orders", getAllProductionOrders);
 productionRouter.get("/summary", getItemsSummary);
+productionRouter.get("/future-sales", authMiddleware as any, getFutureSales);
 productionRouter.patch("/batch", batchUpdateProductionTasks);
 productionRouter.post("/progress", registerProgress);
 productionRouter.post("/progress/batch", batchRegisterProgress);
