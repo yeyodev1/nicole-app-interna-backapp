@@ -85,6 +85,8 @@ Venta con link (v8): `TIENDA_PUBLIC_URL` (default `https://nicolepastry.com.ec`,
 
 Conector MCP, CRM (HighLevel), solo lectura: `HIGHLEVEL_PIT` + `HIGHLEVEL_LOCATION_ID` (subcuenta de Nicole) y `HIGHLEVEL_SUCREE_PIT` + `HIGHLEVEL_SUCREE_LOCATION_ID` (subcuenta de Sucrée). Las herramientas `crm_*` reciben `marca: nicole | sucree` (default nicole); una marca sin credenciales responde error y no se registra nada si faltan las dos.
 
+Asistente de ventas (`/api/sales-assistant`, JWT; roles admin, superadmin, sales, SALES_MANAGER, SALES_REP): `ANTHROPIC_API_KEY` (sin ella `POST /analyze` responde 503). Al pulsar "Analizar ahora" lee del CRM (mismas credenciales HighLevel, solo lectura) las conversaciones desde ayer 17:00 (Ecuador) hasta ese momento, Claude (`claude-opus-5-5`, salida JSON) las clasifica en CALIENTE / TIBIO / TAREA y escribe el mensaje propuesto; se suman los links de entrega pendientes y las reservas sin pago (mensaje fijo, sin IA). Modelos `SalesAssistantAnalysis` y `SalesAssistantMark` (casillas por `key`, se mantienen entre análisis; TTL 30 días). Límites por el corte de 60 s de Vercel en `services/sales-assistant.service.ts`.
+
 Optional, punto de emisión de facturas (`src/config/contifico-emision.config.ts`):
 `CONTIFICO_ESTABLECIMIENTO` (default `001`), `CONTIFICO_PUNTO_EMISION` (default `001` = Matriz / CDP),
 `CONTIFICO_SECUENCIAL_MINIMO` (piso opcional del contador, default 0), `CONTIFICO_SECUENCIALES_EXCLUIDOS` (default `1000001-1000010`: rango que se salta y se ignora al leer Contífico).

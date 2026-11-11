@@ -25,6 +25,7 @@ import SellerRouter from "./seller.router";
 import WebOrderRouter from "./web-order.router";
 import NotificationRouter from "./notification.router";
 import PayphoneRouter from "./payphone.router";
+import SalesAssistantRouter from "./sales-assistant.router";
 import { McpPortalRouter, McpRouter } from "./mcp.router";
 
 import { WarehouseRouter } from "./warehouse.routes";
@@ -56,6 +57,7 @@ function routerApi(app: Application) {
   router.use("/web-orders", WebOrderRouter);
   router.use("/notifications", NotificationRouter);
   router.use("/payphone", PayphoneRouter);
+  router.use("/sales-assistant", SalesAssistantRouter);
 
   router.use("/provider-categories", ProviderCategoryRouter);
   router.use("/warehouse", WarehouseRouter);
