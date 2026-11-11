@@ -920,6 +920,7 @@ export class POSRestockService {
       productName: string;
       stockInicial: number | null;
       pedidoAnterior: number;
+      cierreAnterior: boolean;
     }> = [];
 
     const cursor = new Date(fromDate);
@@ -944,6 +945,7 @@ export class POSRestockService {
               productName: prevItem.productName,
               stockInicial: initial !== undefined ? initial : prevItem.stockFinal ?? null,
               pedidoAnterior: prevItem.pedidoFinal ?? 0,
+              cierreAnterior: true,
             });
           }
           continue;
@@ -978,6 +980,8 @@ export class POSRestockService {
             stockObjectiveTomorrow: item.stockObjectiveTomorrow ?? 0,
             pedidoFinal: item.pedidoFinal ?? 0,
             pedidoAnterior: prevItem ? (prevItem.pedidoFinal ?? 0) : null,
+            // ¿La sucursal envió cierre el día anterior? (para explicar un stock inicial vacío)
+            cierreAnterior: daysWithEntry.has(`${bk}|${prevStr}`),
             // Sin cierre previo, el recibido es el punto de partida.
             ventaImplicita: (stockInicial ?? 0) + recibido - bajas - stockFinal,
             submittedBy: entry.submittedBy,
