@@ -28,6 +28,13 @@ const CLAUDE_TIMEOUT_MS = 40_000;
 
 export const aiConfigured = () => !!process.env.ANTHROPIC_API_KEY;
 
+/** Las claves de usuario de Anthropic piden el espacio de trabajo en cada llamada (ANTHROPIC_WORKSPACE_ID). */
+const newClaude = () =>
+  new Anthropic({
+    apiKey: process.env.ANTHROPIC_API_KEY,
+    defaultHeaders: process.env.ANTHROPIC_WORKSPACE_ID ? { "anthropic-workspace-id": process.env.ANTHROPIC_WORKSPACE_ID } : undefined,
+  });
+
 /** HighLevel marca el canal como TYPE_WHATSAPP. */
 const isWhatsApp = (type: unknown) => /WHATSAPP/i.test(String(type || ""));
 
@@ -505,7 +512,7 @@ export async function runSalesAnalysis(from: Date): Promise<AnalysisOutput> {
       conversationId: c.id,
     }));
   } else if (convs.length) {
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const client = newClaude();
     const chunks: CrmConversation[][] = [];
     for (let i = 0; i < convs.length; i += CHUNK_SIZE) chunks.push(convs.slice(i, i + CHUNK_SIZE));
     const [results] = await Promise.all([
@@ -514,7 +521,7 @@ export async function runSalesAnalysis(from: Date): Promise<AnalysisOutput> {
     ]);
     items = crmItems(convs, results.flat());
   } else if (tasks.length && aiConfigured()) {
-    await writeTaskMessages(new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }), tasks, warnings);
+    await writeTaskMessages(newClaude(), tasks, warnings);
   }
 
   const order: Record<string, number> = { CALIENTE: 0, TIBIO: 1, REBOTO: 2, POSTVENTA: 3, TAREA: 4, FRIO: 5 };
