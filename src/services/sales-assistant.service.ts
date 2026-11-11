@@ -326,7 +326,26 @@ export async function runSalesAnalysis(from: Date): Promise<AnalysisOutput> {
   const convs = crmByAccount.flat();
 
   let items: ISalesAssistantItem[] = [];
-  if (convs.length) {
+  if (convs.length && !aiConfigured()) {
+    // IA pendiente (sin ANTHROPIC_API_KEY): las que esperan respuesta van a Tareas, sin clasificar ni mensaje.
+    warnings.push("IA pendiente: falta la clave de Anthropic. Se muestran sin clasificar las conversaciones que esperan respuesta.");
+    items = convs.filter((c) => c.lastFromClient).map((c) => ({
+      key: `crm:${c.id}:${c.lastMessageDate}`,
+      group: "TAREA" as const,
+      source: "crm" as const,
+      marca: c.marca,
+      cliente: c.cliente,
+      telefono: c.telefono,
+      ultimoMensaje: c.ultimoMensaje,
+      ultimoMensajeDe: "cliente" as const,
+      recibido: ec(c.lastMessageDate) || undefined,
+      motivo: "El cliente escribió y espera respuesta.",
+      tarea: "Responder al cliente",
+      detalle: c.ultimoMensaje || undefined,
+      mensaje: "",
+      conversationId: c.id,
+    }));
+  } else if (convs.length) {
     const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
     const chunks: CrmConversation[][] = [];
     for (let i = 0; i < convs.length; i += CHUNK_SIZE) chunks.push(convs.slice(i, i + CHUNK_SIZE));

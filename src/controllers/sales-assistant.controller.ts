@@ -100,10 +100,6 @@ export async function getAnalysis(req: AuthRequest, res: Response, _next: NextFu
 /** POST /api/sales-assistant/analyze — corre un análisis nuevo (desde ayer 17:00 hasta ahora). */
 export async function analyze(req: AuthRequest, res: Response, _next: NextFunction) {
   if (!allowed(req, res)) return;
-  if (!aiConfigured()) {
-    res.status(HttpStatusCode.ServiceUnavailable).send({ message: "Falta configurar la IA (ANTHROPIC_API_KEY). Avísale a Diego." });
-    return;
-  }
   const running = await SalesAssistantAnalysisModel.findOne({
     status: "RUNNING",
     createdAt: { $gt: new Date(Date.now() - RUNNING_STALE_MS) },
@@ -120,7 +116,7 @@ export async function analyze(req: AuthRequest, res: Response, _next: NextFuncti
     const result = await runSalesAnalysis(from);
     doc.set({ status: "DONE", items: result.items, conversationsRead: result.conversationsRead, warnings: result.warnings });
     await doc.save();
-    res.status(HttpStatusCode.Ok).send({ analysis: await withMarks(doc.toObject()), aiConfigured: true });
+    res.status(HttpStatusCode.Ok).send({ analysis: await withMarks(doc.toObject()), aiConfigured: aiConfigured() });
   } catch (error) {
     console.error("❌ Error en sales-assistant analyze:", error);
     doc.set({ status: "ERROR", error: (error as Error).message?.slice(0, 300) });
