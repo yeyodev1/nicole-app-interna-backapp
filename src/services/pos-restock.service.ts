@@ -912,6 +912,15 @@ export class POSRestockService {
     // Recorrer día por día del rango solicitado.
     const rows: any[] = [];
     const missing: Array<{ date: string; branch: string }> = [];
+    // Días sin cierre: igual se sabe con cuánto empezó y qué pidió la sucursal
+    // (sale del cierre del día anterior). Va aparte de `rows` para no tocar los totales.
+    const openings: Array<{
+      date: string;
+      branch: string;
+      productName: string;
+      stockInicial: number | null;
+      pedidoAnterior: number;
+    }> = [];
 
     const cursor = new Date(fromDate);
     while (cursor <= toDate) {
@@ -924,6 +933,19 @@ export class POSRestockService {
         const bk = branchKey(bName);
         if (!daysWithEntry.has(`${bk}|${dateStr}`)) {
           missing.push({ date: dateStr, branch: bName });
+          const prevEntry = entries.find(
+            (e) => branchKey(e.branch) === bk && toDateStr(new Date(e.date)) === prevStr
+          );
+          for (const prevItem of prevEntry?.items || []) {
+            const initial = initialIndex.get(`${bk}|${dateStr}|${pk(prevItem.productName)}`);
+            openings.push({
+              date: dateStr,
+              branch: prevEntry.branch,
+              productName: prevItem.productName,
+              stockInicial: initial !== undefined ? initial : prevItem.stockFinal ?? null,
+              pedidoAnterior: prevItem.pedidoFinal ?? 0,
+            });
+          }
           continue;
         }
 
@@ -983,6 +1005,7 @@ export class POSRestockService {
       totals: { ...totals, rows: rows.length },
       branches: branchNames,
       missing,
+      openings,
     };
   }
 

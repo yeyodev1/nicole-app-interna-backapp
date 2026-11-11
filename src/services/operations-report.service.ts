@@ -305,6 +305,14 @@ export class OperationsReportService {
         row.ventaCierre = (row.ventaCierre || 0) + r.ventaImplicita;
       }
     }
+    // Días sin cierre de la sucursal: el stock inicial y el pedido salen del cierre
+    // del día anterior, así se ven aunque la sucursal aún no envíe el de hoy.
+    const openings = ((leftovers.openings as any[]) || []).filter((o) => normalizeString(o.branch) === bKey);
+    for (const o of openings) {
+      const row = getRow(o.productName);
+      if (o.date === firstDay) row.inicial = addN(row.inicial, o.stockInicial);
+      row.pedidoAnterior = (row.pedidoAnterior ?? 0) + (o.pedidoAnterior || 0);
+    }
     // Inventario inicial cargado por Operaciones para el primer día: es el "empezó",
     // aunque la sucursal todavía no haya hecho el cierre de ese día.
     const initialItems = await this.posRestock.initialItemsFor(branch, firstDay);
