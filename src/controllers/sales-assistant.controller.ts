@@ -7,8 +7,8 @@ import { aiConfigured, rangeStart, runSalesAnalysis } from "../services/sales-as
 
 /** Asistente de ventas: solo los roles comerciales (y gerencia) lo ven y lo usan. */
 const ALLOWED_ROLES = ["admin", "superadmin", "sales", "SALES_MANAGER", "SALES_REP"];
-/** Un análisis "en curso" más viejo que esto se da por caído (Vercel corta a los 60 s). */
-const RUNNING_STALE_MS = 2 * 60 * 1000;
+/** Un análisis "en curso" más viejo que esto se da por caído (Vercel corta a los 300 s). */
+const RUNNING_STALE_MS = 6 * 60 * 1000;
 
 function allowed(req: AuthRequest, res: Response): boolean {
   if (req.user && ALLOWED_ROLES.includes(req.user.role)) return true;
