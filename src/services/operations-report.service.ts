@@ -354,14 +354,21 @@ export class OperationsReportService {
       if ((row.pedidoAnterior ?? 0) > 0 && row.recibidoOk + row.recibidoSinOk === 0) {
         motivos.push("Falta registro de despacho de CDP");
       }
+      // Debería quedar en vivo (11/11/2026): no necesita el cierre. Se calcula con
+      // la venta de Contífico del momento y lo que la isla haya ingresado hasta
+      // ahora (combo/fuera de isla y bajas llegan con el cierre; antes cuentan 0).
+      // Si falta cualquier otro dato, sigue sin calcularse.
+      if (motivos.length === 0) {
+        row.deberiaQuedar = row.inicial! + row.recibido - row.vendido - row.bajas;
+      }
       if (row.quedo === null) {
         motivos.push(cierreDelDia ? "El cierre no trae cuánto quedó" : "Falta el cierre de este día");
       }
       row.motivosIncompleto = motivos;
       if (motivos.length > 0) continue;
 
-      row.deberiaQuedar = row.inicial! + row.recibido - row.vendido - row.bajas;
-      row.descuadre = row.quedo! - row.deberiaQuedar;
+      // Diferencia: solo con el cierre (lo que la isla contó que quedó)
+      row.descuadre = row.quedo! - row.deberiaQuedar!;
     }
 
     const products = Array.from(byName.values()).sort((a, b) => {
