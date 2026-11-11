@@ -5,7 +5,7 @@ import { Schema, model, Document } from "mongoose";
  * análisis con las conversaciones del CRM clasificadas por Claude (calientes, tibios,
  * tareas) más los pedidos de la app que esperan algo del cliente.
  */
-export type SalesAssistantGroup = "CALIENTE" | "TIBIO" | "TAREA";
+export type SalesAssistantGroup = "CALIENTE" | "TIBIO" | "REBOTO" | "FRIO" | "POSTVENTA" | "TAREA";
 export type SalesAssistantSource = "crm" | "app";
 
 export interface ISalesAssistantItem {
@@ -21,6 +21,11 @@ export interface ISalesAssistantItem {
   recibido?: string;
   motivo: string;
   puntaje?: number;
+  prioridad?: "ALTA" | "MEDIA" | "BAJA";
+  paso?: string;
+  senales?: string[];
+  falta?: string;
+  seguimiento?: string;
   tarea?: string;
   detalle?: string;
   mensaje: string;
@@ -44,7 +49,7 @@ export interface ISalesAssistantAnalysis extends Document {
 const ItemSchema = new Schema<ISalesAssistantItem>(
   {
     key: { type: String, required: true },
-    group: { type: String, enum: ["CALIENTE", "TIBIO", "TAREA"], required: true },
+    group: { type: String, enum: ["CALIENTE", "TIBIO", "REBOTO", "FRIO", "POSTVENTA", "TAREA"], required: true },
     source: { type: String, enum: ["crm", "app"], required: true },
     marca: { type: String, enum: ["nicole", "sucree"], required: true },
     cliente: { type: String, required: true },
@@ -54,6 +59,11 @@ const ItemSchema = new Schema<ISalesAssistantItem>(
     recibido: String,
     motivo: { type: String, default: "" },
     puntaje: Number,
+    prioridad: { type: String, enum: ["ALTA", "MEDIA", "BAJA"] },
+    paso: String,
+    senales: { type: [String], default: undefined },
+    falta: String,
+    seguimiento: String,
     tarea: String,
     detalle: String,
     mensaje: { type: String, default: "" },
