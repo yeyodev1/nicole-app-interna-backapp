@@ -19,12 +19,12 @@ import { SALES_GUIDE_CATALOG, SALES_GUIDE_PENDING_RULES } from "../config/sales-
  */
 
 const MODEL = "claude-opus-5-5";
-/** Vercel corta a los 60 s: el análisis completo tiene que caber antes. */
+/** Vercel corta a los 300 s (vercel.json); un lote de 8 con Opus tarda ~45 s, así que los lotes van todos en paralelo. */
 const CRM_PAGES_MAX = 4; // 400 conversaciones por marca
 const CONVERSATIONS_MAX = 40; // por marca
 const MESSAGES_PER_CONVERSATION = 12;
 const CHUNK_SIZE = 8; // conversaciones por llamada a Claude (en paralelo)
-const CLAUDE_TIMEOUT_MS = 40_000;
+const CLAUDE_TIMEOUT_MS = 150_000;
 
 export const aiConfigured = () => !!process.env.ANTHROPIC_API_KEY;
 
@@ -516,7 +516,7 @@ export async function runSalesAnalysis(from: Date): Promise<AnalysisOutput> {
     const chunks: CrmConversation[][] = [];
     for (let i = 0; i < convs.length; i += CHUNK_SIZE) chunks.push(convs.slice(i, i + CHUNK_SIZE));
     const [results] = await Promise.all([
-      pool(chunks, 6, (chunk) => classify(client, chunk, history, warnings)),
+      pool(chunks, 10, (chunk) => classify(client, chunk, history, warnings)),
       tasks.length ? writeTaskMessages(client, tasks, warnings) : Promise.resolve(),
     ]);
     items = crmItems(convs, results.flat());
