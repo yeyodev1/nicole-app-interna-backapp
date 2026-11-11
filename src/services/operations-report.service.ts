@@ -305,6 +305,20 @@ export class OperationsReportService {
         row.ventaCierre = (row.ventaCierre || 0) + r.ventaImplicita;
       }
     }
+    // Días sin cierre de la sucursal: el stock inicial y el pedido salen del cierre
+    // del día anterior, así se ven aunque la sucursal aún no envíe el de hoy.
+    const openings = ((leftovers.openings as any[]) || []).filter((o) => normalizeString(o.branch) === bKey);
+    for (const o of openings) {
+      const row = getRow(o.productName);
+      if (o.date === firstDay) row.inicial = addN(row.inicial, o.stockInicial);
+      row.pedidoAnterior = (row.pedidoAnterior ?? 0) + (o.pedidoAnterior || 0);
+    }
+    // Para explicar qué falta: ¿hubo cierre el día anterior al rango y el último día del rango?
+    const primerDia = rows.find((r) => r.date === firstDay);
+    const cierreAnterior = primerDia
+      ? Boolean(primerDia.cierreAnterior)
+      : openings.some((o) => o.date === firstDay);
+    const cierreDelDia = rows.some((r) => r.date === lastDay);
     // Inventario inicial cargado por Operaciones para el primer día: es el "empezó",
     // aunque la sucursal todavía no haya hecho el cierre de ese día.
     const initialItems = await this.posRestock.initialItemsFor(branch, firstDay);
@@ -333,12 +347,16 @@ export class OperationsReportService {
       // Regla de Gerencia (09/11/2026): si falta un dato no se calcula ni se asume.
       const motivos: string[] = [];
       if (!sales.available) motivos.push("Sin venta de Contífico");
-      if (row.inicial === null) motivos.push("Falta cierre del día anterior o sus excedentes");
+      if (row.inicial === null) {
+        motivos.push(cierreAnterior ? "No está en el cierre del día anterior" : "Falta el cierre del día anterior");
+      }
       if (row.recibidoSinOk > 0) motivos.push("Falta OK de recepción");
       if ((row.pedidoAnterior ?? 0) > 0 && row.recibidoOk + row.recibidoSinOk === 0) {
         motivos.push("Falta registro de despacho de CDP");
       }
-      if (row.quedo === null) motivos.push("Excedentes sin reporte");
+      if (row.quedo === null) {
+        motivos.push(cierreDelDia ? "El cierre no trae cuánto quedó" : "Falta el cierre de este día");
+      }
       row.motivosIncompleto = motivos;
       if (motivos.length > 0) continue;
 
