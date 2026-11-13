@@ -4,6 +4,18 @@ import CustomError from "../errors/customError.error";
 import { getECDateRange, getEcuadorNow } from "../utils/date.utils";
 import { NOT_DISCARDED } from "../utils/reserva";
 
+/**
+ * Orden de reparto de la reposición: "Primera Entrega" primero, luego las siguientes.
+ * Sin ronda (cierre sin rondas) cuenta como la primera.
+ */
+const ROUND_ORDINALS = ["primera", "segunda", "tercera", "cuarta", "quinta", "sexta"];
+function roundRank(label?: string | null): number {
+  const l = String(label || "").trim().toLowerCase();
+  if (!l) return 0;
+  const i = ROUND_ORDINALS.findIndex((w) => l.includes(w));
+  return i === -1 ? ROUND_ORDINALS.length : i;
+}
+
 export class ProductionService {
   /**
    * Returns production tasks (Orders), sorted by delivery date (urgency).
@@ -648,7 +660,6 @@ export class ProductionService {
   async registerDispatch(orderId: string, dispatchData: { destination: string; items: any[]; notes?: string; reportedBy: string }) {
     const order = await OrderModel.findById(orderId);
     if (!order) throw new Error("Order not found");
-    this.assertWithinProduced(order, dispatchData.items || []);
 
     const newDispatch: any = {
       reportedAt: new Date(),
@@ -660,6 +671,7 @@ export class ProductionService {
     };
 
     order.dispatches.push(newDispatch);
+    this.markProducedFromDispatches(order);
 
     // Audit Log for Dispatch
     order.auditLog.push({
@@ -700,12 +712,12 @@ export class ProductionService {
       throw new Error("Edit window expired (1 hour limit).");
     }
 
-    if (updates.items) this.assertWithinProduced(order, updates.items, dispatchId);
 
     // Apply updates
     if (updates.items) dispatch.items = updates.items;
     if (updates.notes !== undefined) dispatch.notes = updates.notes;
     dispatch.modifiedAt = now;
+    if (updates.items) this.markProducedFromDispatches(order);
 
     // Recalculate Status
     this.recalculateDispatchStatus(order);
@@ -803,24 +815,32 @@ export class ProductionService {
   }
 
   /**
-   * Orden 6: ningún ítem puede superar lo producido menos lo ya enviado
-   * (sin contar el despacho que se está editando). Lanza 400 con el producto y lo disponible.
+   * Despachar cuenta como producido: `produced` de cada producto sube hasta lo enviado
+   * (nunca baja lo ya registrado). Así ya no hace falta "marcar producido" antes de
+   * despachar y los reportes de producción siguen teniendo datos.
    */
-  private assertWithinProduced(order: any, items: any[], excludeDispatchId?: string) {
+  private markProducedFromDispatches(order: any) {
     const sentMap = new Map<string, number>();
     for (const d of order.dispatches || []) {
-      if (excludeDispatchId && String(d._id) === String(excludeDispatchId)) continue;
       for (const it of d.items || []) sentMap.set(String(it.productId), (sentMap.get(String(it.productId)) || 0) + (Number(it.quantitySent) || 0));
     }
-    const asked = new Map<string, number>();
-    for (const it of items) asked.set(String(it.productId), (asked.get(String(it.productId)) || 0) + (Number(it.quantitySent) || 0));
-    for (const [pid, qty] of asked) {
-      const product = (order.products || []).find((p: any) => String(p._id) === pid);
-      if (!product || qty <= 0) continue;
-      const available = Math.max(0, (product.produced || 0) - (sentMap.get(pid) || 0));
-      if (qty > available) {
-        throw new CustomError(`${product.name}: no se puede enviar ${qty}, disponible ${available} (producido menos lo ya enviado).`, 400);
+    let changed = false;
+    for (const product of order.products || []) {
+      const sent = sentMap.get(String(product._id)) || 0;
+      if (sent > (product.produced || 0)) {
+        product.produced = sent;
+        changed = true;
       }
+      if (sent >= product.quantity && product.productionStatus !== "COMPLETED") {
+        product.productionStatus = "COMPLETED";
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    order.markModified("products");
+    const allDone = (order.products || []).every((p: any) => p.productionStatus === "COMPLETED" || (p.produced || 0) >= p.quantity);
+    if (allDone && order.productionStage !== "FINISHED" && order.productionStage !== "VOID") {
+      order.productionStage = "FINISHED";
     }
   }
 
@@ -887,137 +907,138 @@ export class ProductionService {
       }
     }
 
+    // Lo que falta manda: si falta algo el pedido sigue PARTIAL (pendiente y en el aviso
+    // de atrasados) aunque otro producto haya salido de más. PROBLEM = completo y de más.
     if (allZero) {
       order.dispatchStatus = "NOT_SENT";
-    } else if (anyExcess) {
-      order.dispatchStatus = "PROBLEM"; // Excess
     } else if (anyDeficit) {
       order.dispatchStatus = "PARTIAL";
+    } else if (anyExcess) {
+      order.dispatchStatus = "PROBLEM"; // Enviado de más
     } else {
       order.dispatchStatus = "SENT"; // Perfect match
     }
   }
 
   /**
-   * Register dispatch progress for multiple items for a specific destination.
-   * Distributes the sent quantities to the oldest pending orders (FIFO).
+   * Despacho de reposición por local desde Resumen de Producción.
+   *
+   * Solo reparte a los pedidos de reposición (`salesChannel` = "Restock") de la sucursal
+   * elegida con entrega el día filtrado (`date`, YYYY-MM-DD). No toca reposiciones viejas
+   * sin cerrar ni pedidos de clientes (esos se despachan uno por uno desde Órdenes).
+   *
+   * - Reparte por ronda ("Primera Entrega", luego las siguientes).
+   * - Lo enviado de más se suma al último pedido de reposición del día que tenga el producto.
+   * - Un solo despacho por pedido y envío: lo pedido + el excedente van en el mismo ítem.
+   * - El destino del despacho es exactamente la sucursal del pedido (el cierre suma por
+   *   `dispatch.destination`).
+   * - No exige "producido": despachar cuenta como producido.
    */
-  async registerDispatchProgress(destination: string, items: { name: string; quantity: number }[]) {
-    const results: any[] = [];
-
-    // Filter Logic for Destination to find matching orders
-    // We need to match how we categorize orders (Sales Channel / Delivery Type)
-    // Destination comes from frontend: 'San Marino', 'Mall del Sol', 'Centro de Producción', 'Domicilio / Delivery'
-
-    let query: any = {
-      // We look for orders that represent demand. 
-      // They could be in any production stage, but dispatch usually implies they are ready or being sent.
-      // We generally want to fulfill orders that are NOT full 'SENT'.
-      dispatchStatus: { $ne: 'SENT' },
-      productionStage: { $ne: 'AWAITING_CLIENT' }
-    };
-
-    if (destination === 'Domicilio / Delivery') {
-      query.deliveryType = 'delivery';
-    } else {
-      // Branch matching
-      // We need flexible matching similar to stats or frontend
-      if (destination.includes('Marino')) {
-        query.branch = { $regex: /marino/i };
-      } else if (destination.includes('Mall') || destination.includes('Sol')) {
-        query.branch = { $regex: /(mall|sol)/i };
-      } else if (destination.includes('Centro') || destination.includes('Producc')) {
-        // Fallback or specific
-        query.branch = { $regex: /(centro|producc)/i };
-      }
-      query.deliveryType = { $ne: 'delivery' };
+  async registerDispatchProgress(
+    destination: string,
+    items: { name: string; quantity: number }[],
+    date?: string,
+    reportedBy = "Producción"
+  ) {
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      throw new CustomError("Falta el día del despacho (YYYY-MM-DD).", 400);
     }
 
-    // 1. Get Candidate Orders sorted by Date (FIFO)
-    const orders = await OrderModel.find({ ...query, ...NOT_DISCARDED }).sort({ deliveryDate: 1 });
+    let branch: RegExp | null = null;
+    if (/marino/i.test(destination)) branch = /marino/i;
+    else if (/(mall|sol)/i.test(destination)) branch = /(mall|sol)/i;
+    if (!branch) {
+      throw new CustomError(`La reposición solo se despacha a San Marino o Mall del Sol (recibido: ${destination}).`, 400);
+    }
 
-    // 2. Process each reported item type
-    for (const item of items) {
-      let quantityToDistribute = item.quantity;
-      let distributedCount = 0;
+    const { startDate, endDate } = getECDateRange(date, false);
+    const orders = await OrderModel.find({
+      salesChannel: "Restock",
+      branch: { $regex: branch },
+      deliveryType: { $ne: "delivery" },
+      deliveryDate: { $gte: startDate, $lte: endDate },
+      productionStage: { $ne: "VOID" },
+      voidedAt: null,
+      ...NOT_DISCARDED,
+    });
+    orders.sort((a: any, b: any) => roundRank(a.comments) - roundRank(b.comments) || String(a._id).localeCompare(String(b._id)));
 
-      for (const order of orders) {
-        if (quantityToDistribute <= 0) break;
-
-        // Check if order needs this item
-        // Needs = Quantity Ordered - Quantity Already Sent
-
-        // Calculate current sent for this specific item in this order
-        let alreadySent = 0;
-        if (order.dispatches && order.dispatches.length > 0) {
-          for (const d of order.dispatches) {
-            for (const dItem of d.items) {
-              // Match by Name (since we are using product names here effectively)
-              // Note: d.items usually stores { productId, name, quantitySent }
-              if (dItem.name === item.name) {
-                alreadySent += dItem.quantitySent;
-              }
-            }
-          }
-        }
-
-        // Find the product definition in the order to get the target quantity
-        const productDef = order.products.find(p => p.name === item.name);
-
-        if (productDef) {
-          // Validation: Can only dispatch what has been produced and not yet sent
-          const produced = productDef.produced || 0;
-          const alreadySentForProduct = alreadySent; // derived above
-
-          // The "demand" is productDef.quantity
-          // But the "capacity to receive dispatch" is limited by what is physically produced for this specific order
-          // (Assuming 'produced' is tracked per-order, which it is in this model)
-
-          const maxDispatchable = produced - alreadySentForProduct;
-
-          // We also can't send more than the order requested obviously
-          const needed = Math.min(productDef.quantity - alreadySentForProduct, maxDispatchable);
-
-          if (needed > 0) {
-            // We can allocate here
-            const take = Math.min(needed, quantityToDistribute);
-
-            // Create Dispatch Record for this Order
-            const dispatchEntry: any = {
-              reportedAt: new Date(),
-              modifiedAt: new Date(),
-              destination: destination,
-              items: [{
-                productId: productDef._id, // If available
-                name: productDef.name,
-                quantitySent: take
-              }],
-              notes: 'Auto-distributed from Mass Dispatch',
-              reportedBy: 'Producción'
-            };
-
-            order.dispatches.push(dispatchEntry);
-
-            // Update counters
-            quantityToDistribute -= take;
-            distributedCount += take;
-
-            // Update Order Status immediately so next iteration knows (though we are in memory loop)
-            this.recalculateDispatchStatus(order);
-
-            // Explicitly mark modified to ensure array updates persist
-            order.markModified('dispatches');
-            await order.save();
+    const sentOf = (order: any, product: any) => {
+      let sent = 0;
+      for (const d of order.dispatches || []) {
+        for (const it of d.items || []) {
+          if (String(it.productId) === String(product._id) || (!it.productId && it.name === product.name)) {
+            sent += Number(it.quantitySent) || 0;
           }
         }
       }
+      return sent;
+    };
 
-      results.push({
-        item: item.name,
-        requested: item.quantity,
-        distributed: distributedCount,
-        remaining: quantityToDistribute // Excess
+    // pedido → (producto → cantidad de este envío)
+    const plan = new Map<any, Map<any, number>>();
+    const add = (order: any, product: any, qty: number) => {
+      if (!plan.has(order)) plan.set(order, new Map());
+      const m = plan.get(order)!;
+      m.set(product, (m.get(product) || 0) + qty);
+    };
+
+    const results: any[] = [];
+    for (const item of items) {
+      const quantity = Math.max(0, Math.round(Number(item.quantity) || 0));
+      let left = quantity;
+      let lastWithProduct: { order: any; product: any } | null = null;
+
+      for (const order of orders) {
+        const product = order.products.find((p: any) => p.name === item.name);
+        if (!product) continue;
+        lastWithProduct = { order, product };
+        if (left <= 0) continue;
+        const already = sentOf(order, product) + (plan.get(order)?.get(product) || 0);
+        const take = Math.min(Math.max(0, product.quantity - already), left);
+        if (take > 0) {
+          add(order, product, take);
+          left -= take;
+        }
+      }
+
+      // Excedente: al último pedido de reposición del día que tiene el producto
+      let excess = 0;
+      if (left > 0 && lastWithProduct) {
+        add(lastWithProduct.order, lastWithProduct.product, left);
+        excess = left;
+        left = 0;
+      }
+
+      results.push({ item: item.name, requested: quantity, distributed: quantity - left, excess, remaining: left });
+    }
+
+    for (const [order, productQty] of plan) {
+      const dispatchItems = Array.from(productQty.entries())
+        .filter(([, qty]) => qty > 0)
+        .map(([product, qty]) => ({ productId: product._id, name: product.name, quantitySent: qty, quantityReceived: 0 }));
+      if (dispatchItems.length === 0) continue;
+
+      order.dispatches.push({
+        reportedAt: new Date(),
+        modifiedAt: new Date(),
+        destination: order.branch,
+        items: dispatchItems,
+        notes: "Despacho de reposición (Resumen de Producción)",
+        reportedBy,
+        receptionStatus: "PENDING",
+      } as any);
+      order.auditLog.push({
+        user: reportedBy,
+        action: "Despacho Registrado",
+        at: new Date(),
+        details: `Reposición a ${order.branch}: ${dispatchItems.map((i) => `${i.quantitySent} ${i.name}`).join(", ")}.`,
       });
+
+      this.markProducedFromDispatches(order);
+      this.recalculateDispatchStatus(order);
+      order.markModified("dispatches");
+      await order.save();
     }
 
     return results;
