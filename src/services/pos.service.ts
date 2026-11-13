@@ -2,6 +2,13 @@ import { models } from "../models";
 import { Types } from "mongoose";
 import CustomError from "../errors/customError.error";
 
+/**
+ * Un pedido anulado (incluye la reserva web descartada: `webOrder.discard` + `VOID`) no se
+ * entrega ni se recibe en la isla: las listas del POS no lo muestran. Mismo filtro que
+ * producción y reportes. Si la reserva se recupera, vuelve a aparecer sola.
+ */
+const NOT_VOID = { voidedAt: null, productionStage: { $ne: "VOID" } };
+
 export class POSService {
 
   /**
@@ -9,7 +16,7 @@ export class POSService {
    * Calculates a consolidated status for the POS UI.
    */
   async getIncomingDispatches(branch?: string, filters: any = {}) {
-    const query: any = {};
+    const query: any = { ...NOT_VOID };
     if (branch && branch !== 'Todas las sucursales') {
       query.branch = { $regex: new RegExp(`^${branch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') };
     }
@@ -135,7 +142,7 @@ export class POSService {
    * Get orders for pickup for a specific branch.
    */
   async getPickupOrders(branch?: string, filters: any = {}) {
-    const query: any = {};
+    const query: any = { ...NOT_VOID };
     if (branch && branch !== 'Todas las sucursales') {
       query.branch = { $regex: new RegExp(`^${branch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') };
     }

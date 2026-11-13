@@ -6,7 +6,7 @@ import { getFutureSales } from "../controllers/future-sales.controller";
 const productionRouter = Router();
 
 productionRouter.get("/", getProductionTasks);
-productionRouter.post("/dispatch/progress", registerDispatchProgress); // New item-based dispatch endpoint
+productionRouter.post("/dispatch/progress", authMiddleware as any, registerDispatchProgress); // New item-based dispatch endpoint
 productionRouter.post("/dispatch/batch", batchRegisterDispatchOrder); // New batch endpoint
 productionRouter.get("/reports", getProductionReports); // New reports endpoint
 productionRouter.get("/all-orders", getAllProductionOrders);
