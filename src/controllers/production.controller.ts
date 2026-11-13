@@ -118,22 +118,24 @@ export async function batchRegisterDispatchOrder(req: Request, res: Response) {
   }
 }
 
-export async function registerDispatchProgress(req: Request, res: Response) {
+export async function registerDispatchProgress(req: AuthRequest, res: Response) {
   try {
-    const { destination, items } = req.body;
+    const { destination, items, date } = req.body;
 
     if (!destination || !items || !Array.isArray(items)) {
       return res.status(HttpStatusCode.BadRequest).send({ message: "Invalid payload. Destination and items array required." });
     }
 
-    const result = await productionService.registerDispatchProgress(destination, items);
+    const reportedBy = req.user?.name || req.user?.email || "Producción";
+    const result = await productionService.registerDispatchProgress(destination, items, date, reportedBy);
 
     res.status(HttpStatusCode.Ok).send({
       message: "Dispatch progress registered",
       data: result
     });
   } catch (error: any) {
-    res.status(HttpStatusCode.InternalServerError).send({ message: "Error registering dispatch progress", error: error.message });
+    const status = error?.statusCode || error?.status || HttpStatusCode.InternalServerError;
+    res.status(status).send({ message: error.message || "Error registering dispatch progress", error: error.message });
   }
 }
 
