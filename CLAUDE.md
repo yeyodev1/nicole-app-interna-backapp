@@ -51,6 +51,7 @@ All routes are mounted under `/api` prefix. The flow is:
 | `/provider-categories` | Supplier categorization |
 | `/warehouse` | Warehouse/stock movements |
 | `/sellers` | Vendedores asignables a la factura (comisiones) |
+| `/inventory` | Inventario semanal (toma de los lunes): catálogo, conteo por bloques y utensilios con foto |
 | `/web-orders` | Pedidos de la tienda online (sin JWT, header `x-api-key` = `WEB_ORDERS_API_KEY`) |
 
 ### Layered Structure
