@@ -25,6 +25,9 @@ import { ProductAliasModel } from "./product-alias.model";
 import { PosAnomalyNoteModel } from "./pos-anomaly-note.model";
 import { ProductionOperatorModel } from "./production-operator.model";
 import { ProductionEntryModel } from "./production-entry.model";
+import { InventoryCatalogModel } from "./inventory-catalog.model";
+import { InventoryUtensilModel } from "./inventory-utensil.model";
+import { InventoryCountModel } from "./inventory-count.model";
 
 export const models = {
   mcpUsers: McpUserModel,
@@ -33,6 +36,9 @@ export const models = {
   posAnomalyNotes: PosAnomalyNoteModel,
   productionOperators: ProductionOperatorModel,
   productionEntries: ProductionEntryModel,
+  inventoryCatalogs: InventoryCatalogModel,
+  inventoryUtensils: InventoryUtensilModel,
+  inventoryCounts: InventoryCountModel,
   orders: OrderModel,
   dailySummaries: DailySummaryModel,
   users: UserModel,
