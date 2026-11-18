@@ -9,6 +9,7 @@ import { issueInvoiceNow } from "./invoice-issue.service";
 import type { NotificationType } from "../models/notification.model";
 import { normalizeEcPhone } from "../utils/phone.utils";
 import { assertDeliverySlotAvailable } from "./delivery-capacity.service";
+import { isPosInvoice, resolvePosInvoiceBranch } from "../utils/pos-invoice";
 
 /**
  * Link de gestión de entrega (contrato v8).
@@ -357,9 +358,18 @@ export async function completeClientLink(token: string, body: any) {
   // Factura: solo si todavía no se emitió (p. ej. Consumidor Final por plazo vencido).
   const alreadyInvoiced = order.invoiceStatus === "PROCESSED";
   const invoice = alreadyInvoiced ? null : parseInvoice(body.invoice, recipientPhone);
-  // Venta del mismo día liquidada en la isla: la factura la emite el punto de venta.
-  // Se guardan los datos (para la cajera) pero el sistema no la emite.
-  const posInvoices = !!invoice && order.settledInIsland === true && date === todayInGuayaquil();
+  // Venta de hoy para hoy: la factura la emite el punto de venta (retiro: la isla
+  // elegida; delivery: la isla de salida), cualquiera sea la forma de pago. Se
+  // guardan los datos (para la cajera) pero el sistema no la emite. Antes solo se
+  // aplicaba con pago "en isla" y la app facturaba los pagados por transferencia o
+  // tarjeta: la caja volvía a facturar (ver utils/pos-invoice.ts).
+  const posBranch = alreadyInvoiced ? null : resolvePosInvoiceBranch(order, date);
+  const posInvoices = !!posBranch;
+  if (posBranch) {
+    order.posInvoiceBranch = posBranch;
+    order.invoiceNeeded = false;
+    link.invoiceDeadlineHandled = "CLIENT_DATA";
+  }
   if (invoice) {
     order.invoiceData = invoice;
     if (!posInvoices) {
@@ -377,7 +387,7 @@ export async function completeClientLink(token: string, body: any) {
     user: "Cliente (link)",
     action: "Entrega gestionada por el cliente",
     at: new Date(),
-    details: `${order.deliveryType === "delivery" ? "Delivery" : `Retiro en ${order.branch}`} · ${date} ${time}${invoice ? ` · Factura a ${invoice.businessName}${posInvoices ? " (la emite el punto de venta)" : ""}` : ""}`,
+    details: `${order.deliveryType === "delivery" ? "Delivery" : `Retiro en ${order.branch}`} · ${date} ${time}${invoice ? ` · Factura a ${invoice.businessName}${posInvoices ? " (la emite el punto de venta)" : ""}` : ""}${posBranch ? ` · Factura en punto de venta: ${posBranch}` : ""}`,
   });
   order.updatedBy = "Cliente (link)";
   await order.save();
@@ -386,7 +396,7 @@ export async function completeClientLink(token: string, body: any) {
   let invoiceResult: { ok: boolean; error?: string } | null = null;
   if (invoice && !posInvoices) {
     invoiceResult = await issueInvoiceNow(String(order._id));
-  } else if (!alreadyInvoiced && !order.invoiceInfo?.id) {
+  } else if (!posInvoices && !alreadyInvoiced && !order.invoiceInfo?.id) {
     invoiceResult = await resolveNoInvoiceData(order);
   }
 
@@ -396,7 +406,7 @@ export async function completeClientLink(token: string, body: any) {
   await notifyAdvisor(order, {
     type: "CLIENT_LINK_COMPLETED",
     title: `${buyer.name || recipientName} completó su pedido`,
-    message: `${where} · ${when}${invoice ? ` · factura a ${invoice.businessName}${posInvoices ? " (emitirla en el punto de venta)" : ""}` : ""}`,
+    message: `${where} · ${when}${invoice ? ` · factura a ${invoice.businessName}${posInvoices ? " (emitirla en el punto de venta)" : ""}` : ""}${posBranch && !invoice ? ` · la factura la emite ${posBranch}` : ""}`,
     email: true,
   });
   if (invoiceResult && !invoiceResult.ok && invoiceResult.error) {
@@ -451,7 +461,8 @@ async function resolveNoInvoiceData(order: any): Promise<{ ok: boolean; error?: 
   const link = order.clientLink;
   if (link.invoiceDeadlineHandled) return null;
   const total = Number(order.totalValue) || 0;
-  if (total <= 0 || order.isGlobalCourtesy || order.settledInIsland) {
+  // Hoy para hoy desde el punto de venta: la factura (también a Consumidor Final) la emite la caja.
+  if (total <= 0 || order.isGlobalCourtesy || order.settledInIsland || isPosInvoice(order)) {
     link.invoiceDeadlineHandled = "CLIENT_DATA";
     order.markModified("clientLink");
     await order.save();
