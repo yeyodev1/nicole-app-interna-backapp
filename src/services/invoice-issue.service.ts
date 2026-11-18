@@ -1,5 +1,6 @@
 import { models } from "../models";
 import { ContificoService } from "./contifico.service";
+import { isPosInvoice, posInvoiceMessage } from "../utils/pos-invoice";
 
 /**
  * Emite en el momento la factura de un pedido, con los mismos pasos que el cron
@@ -34,6 +35,8 @@ export async function issueInvoiceNow(orderId: string): Promise<{ ok: boolean; e
   const order: any = await models.orders.findById(orderId);
   if (!order) return { ok: false, error: "Pedido no encontrado" };
   if (order.invoiceStatus === "PROCESSED") return { ok: true };
+  // Hoy para hoy desde el punto de venta: la factura la emite la caja (evita la doble factura).
+  if (isPosInvoice(order)) return { ok: false, error: posInvoiceMessage(order) };
 
   order.invoiceNeeded = true;
   try {
