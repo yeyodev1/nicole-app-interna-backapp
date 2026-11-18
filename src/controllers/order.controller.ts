@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from "express";
+import { alreadyInvoicedMessage, applyIslandSettle, isAppInvoiced } from "../utils/island-settle";
 import { CONTIFICO_CUENTA_BANCARIA_TRA } from "../config/contifico-cobro.config";
 import { isPrecioIvaIncluido, lineDiscountPercent } from "../config/precio-final.config";
 import axios, { HttpStatusCode } from "axios";
@@ -2277,34 +2278,13 @@ export async function settleOrderInIsland(req: AuthRequest, res: Response) {
       return;
     }
 
-    // 1. Update settlement fields
-    order.settledInIsland = true;
-    order.settledIslandName = islandName;
-
-    // 2. Add 'ISLA' payment to mark as "Paid" in the system
-    // We add it to the payments array and update paymentMethod
-    const amountToSettle = order.totalValue;
-
-    order.payments.push({
-      forma_cobro: 'ISLA',
-      monto: amountToSettle,
-      fecha: new Date(),
-      reference: `Settled in ${islandName}`,
-      status: 'PAID'
-    });
-
-    // Update paymentMethod for summary
-    order.paymentMethod = `Isla: ${islandName}`;
-
-    // Update paymentDetails for list view legacy check (if still used)
-    if (!order.paymentDetails?.monto) {
-      order.paymentDetails = {
-        forma_cobro: 'ISLA',
-        monto: amountToSettle,
-        fecha: new Date().toISOString().split('T')[0],
-        numero_comprobante: `ISLA-${islandName}`
-      };
+    // Ya facturado por la app: no se marca "en isla" ni se suma pago (la caja
+    // lo facturaría otra vez). Con saldo: pago ISLA solo por lo que falta.
+    if (isAppInvoiced(order)) {
+      res.status(HttpStatusCode.Conflict).send({ message: alreadyInvoicedMessage(order) });
+      return;
     }
+    applyIslandSettle(order, islandName, `Settled in ${islandName}`);
 
     await order.save();
 
