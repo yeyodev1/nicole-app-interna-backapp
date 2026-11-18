@@ -170,6 +170,8 @@ export interface IOrder extends Document {
   isGlobalCourtesy: boolean;
   skipProduction: boolean;
   exitPoint?: string;
+  /** Isla que factura el pedido (hoy para hoy desde el punto de venta): la app no lo factura. Ver utils/pos-invoice.ts. */
+  posInvoiceBranch?: string;
 
   // Dispatch Fields
   dispatches: IDispatch[];
@@ -334,6 +336,7 @@ const OrderSchema = new Schema<IOrder>(
     isGlobalCourtesy: { type: Boolean, default: false },
     skipProduction: { type: Boolean, default: false },
     exitPoint: { type: String, default: '' },
+    posInvoiceBranch: { type: String, default: '' },
 
     // Dispatch Fields
     dispatches: { type: [DispatchSchema], default: [] },

@@ -1,4 +1,5 @@
 import { models } from "../models";
+import { applyIslandSettle } from "../utils/island-settle";
 import { Types } from "mongoose";
 import CustomError from "../errors/customError.error";
 
@@ -49,7 +50,7 @@ export class POSService {
     // Fetch orders
     const orders = await models.orders.find(query)
       .sort({ deliveryDate: -1 })
-      .select("orderNumber customerName deliveryDate deliveryTime products totalValue paymentMethod status dispatches payments settledInIsland isGlobalCourtesy globalDiscountPercentage branch salesChannel comments")
+      .select("orderNumber customerName deliveryDate deliveryTime products totalValue paymentMethod status dispatches payments settledInIsland isGlobalCourtesy globalDiscountPercentage branch salesChannel comments invoiceStatus invoiceInfo.documento")
       .lean();
 
     // Map to normalized POS status
@@ -165,7 +166,7 @@ export class POSService {
     // Fetch all for now, we'll filter by "RECEIVED" if requested or let controller/frontend do it
     const orders = await models.orders.find(query)
       .sort({ deliveryDate: 1 })
-      .select("orderNumber customerName deliveryDate deliveryTime products productionStatus totalValue paymentMethod paymentDetails payments status dispatches settledInIsland isGlobalCourtesy globalDiscountPercentage branch salesChannel comments")
+      .select("orderNumber customerName deliveryDate deliveryTime products productionStatus totalValue paymentMethod paymentDetails payments status dispatches settledInIsland isGlobalCourtesy globalDiscountPercentage branch salesChannel comments invoiceStatus invoiceInfo.documento")
       .lean();
 
     return orders.map((order: any) => {
@@ -222,28 +223,10 @@ export class POSService {
     const order = await models.orders.findById(orderId);
     if (!order) throw new Error("Order not found");
 
-    // Update settlement fields
-    order.settledInIsland = true;
-    order.settledIslandName = islandName;
-
-    // Record 'ISLA' payment to mark as "Paid"
-    const amountToSettle = order.totalValue;
-
-    // Avoid duplicates if already settled or has ISLA payment
-    const hasIslaPayment = (order.payments || []).some((p: any) => p.forma_cobro === 'ISLA' && p.monto === amountToSettle);
-
-    if (!hasIslaPayment) {
-      order.payments.push({
-        forma_cobro: 'ISLA',
-        monto: amountToSettle,
-        fecha: new Date(),
-        reference: `Settled in ${islandName} (POS Bulk)`,
-        status: 'PAID'
-      });
-    }
-
-    // Update paymentMethod for summary views
-    order.paymentMethod = `Isla: ${islandName}`;
+    // Ya facturado por la app: la caja no lo factura ni se suma pago.
+    // Con saldo: pago ISLA solo por lo que falta (antes se sumaba el total).
+    const result = applyIslandSettle(order, islandName, `Settled in ${islandName} (POS Bulk)`);
+    if (result === "ALREADY_INVOICED") return order;
 
     await order.save();
     return order;

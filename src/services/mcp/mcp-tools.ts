@@ -64,7 +64,7 @@ function compact(o: any) {
     total: money(o.totalValue),
     pagado: paidOf(o),
     pago_pendiente: money(Math.max(0, (o.totalValue || 0) - paidOf(o))),
-    factura: o.settledInIsland ? "facturado en isla" : o.invoiceStatus || "sin factura",
+    factura: o.posInvoiceBranch && o.invoiceStatus !== "PROCESSED" ? `factura en punto de venta (${o.posInvoiceBranch})` : o.settledInIsland ? "facturado en isla" : o.invoiceStatus || "sin factura",
     produccion: o.productionStage,
     despacho: o.dispatchStatus,
     anulado: !!o.voidedAt || o.productionStage === "VOID",
@@ -158,7 +158,7 @@ export function buildMcpServer(userEmail: string) {
         .find(q)
         .sort({ createdAt: -1 })
         .limit(pago === "todos" ? limite : 500)
-        .select("customerName salesChannel responsible createdAt deliveryDate deliveryTime deliveryType branch totalValue payments invoiceStatus settledInIsland productionStage dispatchStatus voidedAt contificoSource webOrder.code")
+        .select("customerName salesChannel responsible createdAt deliveryDate deliveryTime deliveryType branch totalValue payments invoiceStatus settledInIsland posInvoiceBranch productionStage dispatchStatus voidedAt contificoSource webOrder.code")
         .lean();
       if (pago !== "todos") {
         orders = orders.filter((o) => (paidOf(o) >= (o.totalValue || 0) - 0.05) === (pago === "pagado")).slice(0, limite);
@@ -247,7 +247,7 @@ export function buildMcpServer(userEmail: string) {
       if (tipo !== "todos") q.deliveryType = tipo;
       const orders: any[] = await models.orders
         .find(q)
-        .select("customerName salesChannel responsible createdAt deliveryDate deliveryTime deliveryType branch totalValue payments invoiceStatus settledInIsland productionStage dispatchStatus voidedAt contificoSource webOrder.code")
+        .select("customerName salesChannel responsible createdAt deliveryDate deliveryTime deliveryType branch totalValue payments invoiceStatus settledInIsland posInvoiceBranch productionStage dispatchStatus voidedAt contificoSource webOrder.code")
         .lean();
       orders.sort((a, b) => String(a.deliveryTime || "").localeCompare(String(b.deliveryTime || "")));
       return json({
@@ -271,11 +271,12 @@ export function buildMcpServer(userEmail: string) {
     async ({ desde, hasta, marca, fecha_por }: any) => {
       const orders: any[] = await models.orders
         .find({ ...range(desde, hasta, fecha_por), ...brandFilter(marca), ...NOT_VOID })
-        .select("customerName invoiceStatus invoiceError settledInIsland totalValue createdAt deliveryDate contificoSource")
+        .select("customerName invoiceStatus invoiceError settledInIsland posInvoiceBranch totalValue createdAt deliveryDate contificoSource")
         .lean();
-      const count: Record<string, number> = { facturado: 0, en_cola: 0, error: 0, sin_factura: 0, facturado_en_isla: 0 };
+      const count: Record<string, number> = { facturado: 0, en_cola: 0, error: 0, sin_factura: 0, facturado_en_isla: 0, factura_punto_de_venta: 0 };
       for (const o of orders) {
-        if (o.settledInIsland) count.facturado_en_isla!++;
+        if ((o as any).posInvoiceBranch && o.invoiceStatus !== "PROCESSED") count.factura_punto_de_venta!++;
+        else if (o.settledInIsland) count.facturado_en_isla!++;
         else if (o.invoiceStatus === "PROCESSED") count.facturado!++;
         else if (o.invoiceStatus === "PENDING") count.en_cola!++;
         else if (o.invoiceStatus === "ERROR") count.error!++;

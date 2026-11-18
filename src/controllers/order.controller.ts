@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from "express";
+import { alreadyInvoicedMessage, applyIslandSettle, isAppInvoiced } from "../utils/island-settle";
 import { CONTIFICO_CUENTA_BANCARIA_TRA } from "../config/contifico-cobro.config";
 import { isPrecioIvaIncluido, lineDiscountPercent } from "../config/precio-final.config";
 import axios, { HttpStatusCode } from "axios";
@@ -13,6 +14,7 @@ import { applyClientLinkMode, clientLinkUrl, clientWhatsappMessage } from "../se
 import { normalizeEcPhone, phoneSearchRegex } from "../utils/phone.utils";
 import { assertDeliverySlotAvailable, deliverySlotsFor, ymdOf } from "../services/delivery-capacity.service";
 import { NOT_DISCARDED, hasPayment, isDiscarded, isReservaOrder } from "../utils/reserva";
+import { APP_INVOICES_FILTER, isPosInvoice, posInvoiceMessage, resolvePosInvoiceBranch } from "../utils/pos-invoice";
 
 const nicoleContificoService = new ContificoService('nicole');
 const sucreeContificoService = new ContificoService('sucree');
@@ -180,6 +182,27 @@ export async function createOrder(req: AuthRequest, res: Response, next: NextFun
     // Si es retiro directo de tienda, marcar como finalizado en producción
     if (orderData.skipProduction === true && !isClientLink) {
       orderData.productionStage = "FINISHED";
+    }
+
+    // Sale del local ("No enviar a producción"): la factura la emite la caja de ese
+    // punto de venta, no la app. Los datos de factura quedan guardados para la cajera.
+    if (!isClientLink) {
+      const posBranch = resolvePosInvoiceBranch(orderData);
+      if (posBranch) {
+        orderData.posInvoiceBranch = posBranch;
+        if (orderData.invoiceNeeded) {
+          orderData.auditLog.push({
+            user: "Sistema",
+            action: "Factura en punto de venta",
+            at: new Date(),
+            details: `Sale de ${posBranch}: la factura la emite la caja; la app no la emite.`,
+          });
+        }
+        orderData.invoiceNeeded = false;
+        delete orderData.invoiceStatus;
+      } else {
+        delete orderData.posInvoiceBranch;
+      }
     }
 
     // Handle Settlement in Island during creation
@@ -562,6 +585,8 @@ export async function processPendingInvoices(req: AuthRequest, res: Response, ne
     const totalPending = await models.orders.countDocuments({
       invoiceNeeded: true,
       invoiceStatus: { $in: ["PENDING", "ERROR"] },
+      // Hoy para hoy desde el punto de venta: la factura la emite la caja.
+      ...APP_INVOICES_FILTER,
       // Pedidos web anulados no se facturan (los manuales siguen igual).
       $nor: [{ "webOrder.externalId": { $exists: true, $ne: null }, $or: [{ productionStage: "VOID" }, { voidedAt: { $ne: null } }] }]
     });
@@ -575,6 +600,8 @@ export async function processPendingInvoices(req: AuthRequest, res: Response, ne
     const pendingOrders = await models.orders.find({
       invoiceNeeded: true,
       invoiceStatus: { $in: ["PENDING", "ERROR"] },
+      // Hoy para hoy desde el punto de venta: la factura la emite la caja.
+      ...APP_INVOICES_FILTER,
       // Pedidos web anulados no se facturan (los manuales siguen igual).
       $nor: [{ "webOrder.externalId": { $exists: true, $ne: null }, $or: [{ productionStage: "VOID" }, { voidedAt: { $ne: null } }] }]
     })
@@ -658,6 +685,8 @@ export async function processPendingInvoices(req: AuthRequest, res: Response, ne
     const remaining = await models.orders.countDocuments({
       invoiceNeeded: true,
       invoiceStatus: { $in: ["PENDING", "ERROR"] },
+      // Hoy para hoy desde el punto de venta: la factura la emite la caja.
+      ...APP_INVOICES_FILTER,
       // Pedidos web anulados no se facturan (los manuales siguen igual).
       $nor: [{ "webOrder.externalId": { $exists: true, $ne: null }, $or: [{ productionStage: "VOID" }, { voidedAt: { $ne: null } }] }]
     });
@@ -806,6 +835,8 @@ export async function updateOrder(req: AuthRequest, res: Response, next: NextFun
     if (order.invoiceStatus !== 'PROCESSED') {
       if (updateData.invoiceNeeded !== undefined) order.invoiceNeeded = updateData.invoiceNeeded;
       if (updateData.invoiceData) order.invoiceData = updateData.invoiceData;
+      // Hoy para hoy desde el punto de venta: los datos quedan para la cajera, la app no factura.
+      if (isPosInvoice(order)) order.invoiceNeeded = false;
     }
 
     // Settlement updates
@@ -1263,7 +1294,9 @@ export async function registerCollection(req: AuthRequest, res: Response, next: 
       // Ensure invoiceNeeded is true so batch picks it up.
       // Pedidos web sin RUC: no se encolan (saldría una factura automática con datos vacíos).
       // Venta con link pendiente: la factura la decide el cliente (o el plazo de 48 h).
+      // Hoy para hoy desde el punto de venta: la factura la emite la caja.
       const skipAutoInvoice =
+        isPosInvoice(order) ||
         (!!order.webOrder?.externalId && !String(order.invoiceData?.ruc || '').trim()) ||
         ((order as any).clientLink?.status === 'PENDING' && !String(order.invoiceData?.ruc || '').trim());
       if (!order.invoiceNeeded && !skipAutoInvoice) {
@@ -1335,6 +1368,12 @@ export async function generateInvoice(req: AuthRequest, res: Response, next: Nex
 
     if (order.invoiceStatus === "PROCESSED") {
       res.status(HttpStatusCode.BadRequest).send({ message: "Invoice already processed." });
+      return;
+    }
+
+    // Hoy para hoy desde el punto de venta: la factura la emite la caja (evita la doble factura).
+    if (isPosInvoice(order)) {
+      res.status(HttpStatusCode.Conflict).send({ message: posInvoiceMessage(order) });
       return;
     }
 
@@ -1464,6 +1503,12 @@ export async function regenerateInvoice(req: AuthRequest, res: Response, next: N
 
     if (!order) {
       res.status(HttpStatusCode.NotFound).send({ message: "Order not found." });
+      return;
+    }
+
+    // Sin factura de la app y hoy para hoy desde el punto de venta: la emite la caja.
+    if (isPosInvoice(order) && !(order as any).invoiceInfo?.id) {
+      res.status(HttpStatusCode.Conflict).send({ message: posInvoiceMessage(order) });
       return;
     }
 
@@ -2139,7 +2184,9 @@ export async function generateMissingInvoices(req: AuthRequest, res: Response, n
       "invoiceInfo": { $in: [null, undefined] },
       voidedAt: null,
       // Pedidos web que el equipo aún no revisa: se facturan a mano al gestionarlos.
-      status: { $ne: "PENDIENTE_GESTION" }
+      status: { $ne: "PENDIENTE_GESTION" },
+      // Hoy para hoy desde el punto de venta: la factura la emite la caja.
+      ...APP_INVOICES_FILTER
     });
 
     summary.found = orders.length;
@@ -2231,34 +2278,13 @@ export async function settleOrderInIsland(req: AuthRequest, res: Response) {
       return;
     }
 
-    // 1. Update settlement fields
-    order.settledInIsland = true;
-    order.settledIslandName = islandName;
-
-    // 2. Add 'ISLA' payment to mark as "Paid" in the system
-    // We add it to the payments array and update paymentMethod
-    const amountToSettle = order.totalValue;
-
-    order.payments.push({
-      forma_cobro: 'ISLA',
-      monto: amountToSettle,
-      fecha: new Date(),
-      reference: `Settled in ${islandName}`,
-      status: 'PAID'
-    });
-
-    // Update paymentMethod for summary
-    order.paymentMethod = `Isla: ${islandName}`;
-
-    // Update paymentDetails for list view legacy check (if still used)
-    if (!order.paymentDetails?.monto) {
-      order.paymentDetails = {
-        forma_cobro: 'ISLA',
-        monto: amountToSettle,
-        fecha: new Date().toISOString().split('T')[0],
-        numero_comprobante: `ISLA-${islandName}`
-      };
+    // Ya facturado por la app: no se marca "en isla" ni se suma pago (la caja
+    // lo facturaría otra vez). Con saldo: pago ISLA solo por lo que falta.
+    if (isAppInvoiced(order)) {
+      res.status(HttpStatusCode.Conflict).send({ message: alreadyInvoicedMessage(order) });
+      return;
     }
+    applyIslandSettle(order, islandName, `Settled in ${islandName}`);
 
     await order.save();
 
