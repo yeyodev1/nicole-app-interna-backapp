@@ -1,9 +1,10 @@
 import { Schema, model, models as mongooseModels, Document, Types } from "mongoose";
 
 /**
- * Toma de inventario de una semana (se hace los lunes) para una empresa. Cada bloque se cuenta
- * por separado y se puede cerrar; un bloque cerrado ya no se edita. Se puede pasar de un bloque
- * a otro sin cerrar el anterior.
+ * Toma de inventario de una empresa. Cada bloque se cuenta por separado y se puede cerrar; se puede
+ * pasar de un bloque a otro sin cerrar el anterior. El mismo día de la toma un bloque cerrado se
+ * puede reabrir para corregir; desde la medianoche (hora de Ecuador) la toma queda bloqueada y se
+ * empieza una toma nueva.
  */
 export interface IInventoryCountItem {
   code: string;
@@ -25,11 +26,14 @@ export interface IInventoryCountBlock<T> {
   updatedBy?: string;
   closedAt?: Date | null;
   closedBy?: string | null;
+  reopenedAt?: Date | null;
+  reopenedBy?: string | null;
 }
 
 export interface IInventoryCount extends Document {
   company: "nicole" | "sucree";
-  weekOf: string; // AAAA-MM-DD del lunes de la semana (hora de Ecuador)
+  /** Fecha de la toma, AAAA-MM-DD en hora de Ecuador. Hasta el 18/11/2026 era el lunes de la semana. */
+  weekOf: string;
   responsible: string;
   pt: IInventoryCountBlock<IInventoryCountItem>;
   pp: IInventoryCountBlock<IInventoryCountItem>;
@@ -67,6 +71,8 @@ const blockOf = (itemSchema: Schema) =>
       updatedBy: { type: String, default: null },
       closedAt: { type: Date, default: null },
       closedBy: { type: String, default: null },
+      reopenedAt: { type: Date, default: null },
+      reopenedBy: { type: String, default: null },
     },
     { _id: false }
   );
