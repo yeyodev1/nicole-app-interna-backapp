@@ -79,6 +79,28 @@ export async function closeInventoryBlock(req: Request, res: Response): Promise<
   }
 }
 
+/** POST /api/inventory/week/blocks/:block/reopen  { company } — solo el mismo día de la toma */
+export async function reopenInventoryBlock(req: Request, res: Response): Promise<void> {
+  if (!guard(req, res, INVENTORY_COUNT_ROLES, COUNT_DENIED)) return;
+  try {
+    const data = await inventoryService.reopenBlock(req.params.block, req.body, userOf(req));
+    res.status(HttpStatusCode.Ok).send({ message: "Bloque reabierto para corregir.", data });
+  } catch (error) {
+    fail(res, error, "No se pudo reabrir el bloque.");
+  }
+}
+
+/** POST /api/inventory/week/new  { company } — empieza una toma nueva hoy */
+export async function startInventoryCount(req: Request, res: Response): Promise<void> {
+  if (!guard(req, res, INVENTORY_COUNT_ROLES, COUNT_DENIED)) return;
+  try {
+    const data = await inventoryService.startNew(req.body);
+    res.status(HttpStatusCode.Ok).send({ message: "Nueva toma de inventario.", data });
+  } catch (error) {
+    fail(res, error, "No se pudo empezar la nueva toma.");
+  }
+}
+
 /** POST /api/inventory/utensils  { company, name, photo } */
 export async function createInventoryUtensil(req: Request, res: Response): Promise<void> {
   if (!guard(req, res, INVENTORY_COUNT_ROLES, COUNT_DENIED)) return;
