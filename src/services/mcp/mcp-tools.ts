@@ -294,6 +294,74 @@ export function buildMcpServer(userEmail: string) {
     }
   );
 
+  reg(server)(
+    "operaciones_locales",
+    {
+      title: "Operaciones por local",
+      description:
+        "Por local y día: si la isla registró la Recepción Masiva de los despachos de reposición que llegan ese día " +
+        "y si envió el Cierre de Producción de ese día. Sirve para comprobar que cada local usa esas pantallas de la app.",
+      inputSchema: { fecha: YMD },
+      annotations: READ_ONLY,
+    },
+    async ({ fecha }: any) => {
+      const [y, m, d] = fecha.split("-").map(Number);
+      const day = new Date(Date.UTC(y!, m! - 1, d!));
+      const [restocks, cierres]: [any[], any[]] = await Promise.all([
+        models.orders
+          .find({ ...range(fecha, fecha, "entrega"), ...NOT_VOID, salesChannel: { $in: ["Restock", "Restock-Bodega"] } })
+          .select("branch salesChannel contificoSource dispatchStatus dispatches.receptionStatus dispatches.reportedAt dispatches.receivedAt dispatches.receivedBy dispatches.receptionNotes")
+          .lean(),
+        models.posDailyEntries.find({ date: day }).select("branch status submittedAt submittedBy items.stockFinal").lean(),
+      ]);
+
+      const locales: Record<string, any> = {};
+      const local = (branch: string) => {
+        const k = String(branch || "Sin sucursal").trim();
+        return (locales[k.toLowerCase()] ||= {
+          sucursal: k,
+          recepcion: { despachos: 0, registrados: 0, con_problema: 0, pendientes: 0, ultima: null, por: null, notas: [] as string[] },
+          cierre: { enviado: false, hora: null, por: null, productos: 0, sin_reporte: 0 },
+        });
+      };
+
+      for (const o of restocks) {
+        const r = local(o.branch).recepcion;
+        for (const disp of o.dispatches || []) {
+          r.despachos++;
+          if (disp.receptionStatus === "PENDING" || !disp.receptionStatus) {
+            r.pendientes++;
+            continue;
+          }
+          r.registrados++;
+          if (disp.receptionStatus === "PROBLEM") r.con_problema++;
+          const at = ecDateTime(disp.receivedAt);
+          if (at && (!r.ultima || at > r.ultima)) {
+            r.ultima = at;
+            r.por = disp.receivedBy || null;
+          }
+          if (disp.receptionNotes) r.notas.push(String(disp.receptionNotes).slice(0, 200));
+        }
+      }
+
+      for (const e of cierres) {
+        const c = local(e.branch).cierre;
+        const items = e.items || [];
+        c.enviado = e.status !== "draft";
+        c.hora = ecDateTime(e.submittedAt);
+        c.por = e.submittedBy || null;
+        c.productos = items.length;
+        c.sin_reporte = items.filter((i: any) => i.stockFinal == null).length;
+      }
+
+      return json({
+        fecha,
+        nota: "recepcion = despachos de reposición con entrega ese día; cierre = Cierre de Producción de ese día (el que pide la reposición del día siguiente).",
+        locales: Object.values(locales).sort((a: any, b: any) => a.sucursal.localeCompare(b.sucursal)),
+      });
+    }
+  );
+
   registerCrmTools(server);
   registerContificoTools(server);
 
