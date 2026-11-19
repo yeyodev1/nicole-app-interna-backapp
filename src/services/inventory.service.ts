@@ -16,10 +16,14 @@ import {
 } from "../config/inventory.config";
 
 /**
- * Inventario semanal (toma de los lunes).
+ * Toma de inventario.
  * - Productos en tres bloques: producto terminado (pt), en proceso (pp) y materia prima (mp).
- * - Utensilios (ut): cada uno con foto; cada semana se cuenta y se compara con las anteriores.
- * - Se puede pasar de un bloque a otro sin cerrarlo; un bloque cerrado ya no se edita.
+ * - Utensilios (ut): cada uno con foto; cada toma se compara con las anteriores.
+ * - Se puede pasar de un bloque a otro sin cerrarlo.
+ * - Una toma por día y empresa (`weekOf` = fecha de la toma, hora de Ecuador). Ese mismo día un
+ *   bloque cerrado se puede reabrir para corregir. Desde la medianoche la toma queda bloqueada
+ *   (también los bloques que quedaron abiertos) y se empieza una toma nueva con el botón.
+ *   Las tomas guardadas antes del 19/11/2026 tienen como fecha el lunes de su semana.
  * - El catálogo (categorías, productos, unidades) lo edita el Jefe de Operaciones en Ajustes.
  */
 
@@ -29,12 +33,7 @@ const clean = (v: unknown) => String(v ?? "").trim().replace(/\s+/g, " ");
 const keyOf = (v: string) => clean(v).toLowerCase();
 
 const todayStr = () => getEcuadorNow().toISOString().split("T")[0];
-/** Lunes (AAAA-MM-DD) de la semana del día dado. */
-const mondayOf = (s: string) => {
-  const d = new Date(`${s}T00:00:00.000Z`);
-  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
-  return d.toISOString().split("T")[0];
-};
+const dm = (s: string) => `${s.slice(8, 10)}/${s.slice(5, 7)}`;
 
 function companyOf(v: unknown): InventoryCompany {
   const c = String(v || "").toLowerCase() as InventoryCompany;
@@ -191,6 +190,8 @@ export class InventoryService {
         ),
         closedAt: b.closedAt || null,
         closedBy: b.closedBy || null,
+        reopenedAt: b.reopenedAt || null,
+        reopenedBy: b.reopenedBy || null,
       };
     };
     return {
@@ -204,35 +205,72 @@ export class InventoryService {
     };
   }
 
-  /** Toma de la semana en curso + utensilios + conteos de utensilios de semanas anteriores. */
+  /** Última toma de la empresa (la vigente), o null si nunca se hizo una. */
+  private async latest(company: InventoryCompany) {
+    return (await models.inventoryCounts.findOne({ company }).sort({ weekOf: -1 }).lean()) as any;
+  }
+
+  /**
+   * Toma que se puede editar hoy. Si la última toma es de un día anterior, ya no se edita:
+   * hay que empezar una nueva con el botón. Si nunca hubo una toma, se trabaja en la de hoy.
+   */
+  private async editableDay(company: InventoryCompany) {
+    const today = todayStr();
+    const last = await this.latest(company);
+    if (last && last.weekOf !== today) {
+      throw badRequest(`La toma del ${dm(last.weekOf)} ya no se puede modificar. Empieza una nueva toma de inventario.`);
+    }
+    return today;
+  }
+
+  /** Toma vigente + utensilios + conteos de utensilios de las tomas anteriores. */
   async getWeek(companyRaw: unknown) {
     const company = companyOf(companyRaw);
     const today = todayStr();
-    const weekOf = mondayOf(today);
-    const [count, utensils, previous] = await Promise.all([
-      models.inventoryCounts.findOne({ company, weekOf }).lean(),
-      this.utensils(company),
-      models.inventoryCounts
-        .find({ company, weekOf: { $lt: weekOf } })
-        .sort({ weekOf: -1 })
-        .limit(INVENTORY_RULES.historyWeeks)
-        .select("weekOf ut.items")
-        .lean(),
-    ]);
+    const [last, utensils] = await Promise.all([this.latest(company), this.utensils(company)]);
+    const weekOf: string = last?.weekOf || today;
+    const previous = await models.inventoryCounts
+      .find({ company, weekOf: { $lt: weekOf } })
+      .sort({ weekOf: -1 })
+      .limit(INVENTORY_RULES.historyWeeks)
+      .select("weekOf ut.items")
+      .lean();
     const history = (previous as any[])
       .reverse()
       .map((c) => ({
         weekOf: c.weekOf,
         utensils: Object.fromEntries((c.ut?.items || []).map((i: any) => [String(i.utensil), i.quantity])),
       }));
-    return { today, weekOf, count: this.countView(count, weekOf, company), utensils, history };
+    const editable = weekOf === today;
+    return {
+      today,
+      weekOf,
+      editable,
+      canStartNew: !editable,
+      count: this.countView(last, weekOf, company),
+      utensils,
+      history,
+    };
+  }
+
+  /** Empieza una toma nueva hoy (solo si la última es de un día anterior). */
+  async startNew(body: any) {
+    const company = companyOf(body?.company);
+    const today = todayStr();
+    const last = await this.latest(company);
+    if (!last || last.weekOf !== today) {
+      await models.inventoryCounts.create({ company, weekOf: today }).catch((e: any) => {
+        if (e?.code !== 11000) throw e; // otra persona la empezó al mismo tiempo
+      });
+    }
+    return this.getWeek(company);
   }
 
   /** Guarda lo contado en un bloque (reemplaza la lista del bloque). */
   async saveBlock(blockRaw: unknown, body: any, user: string) {
     const company = companyOf(body?.company);
     const block = blockOf(blockRaw);
-    const weekOf = mondayOf(todayStr());
+    const weekOf = await this.editableDay(company);
     const itemsIn: any[] = Array.isArray(body?.items) ? body.items : [];
 
     let items: any[];
@@ -282,11 +320,11 @@ export class InventoryService {
     }
   }
 
-  /** Cierra un bloque de la semana: ya no se puede editar. */
+  /** Cierra un bloque de la toma de hoy (se puede reabrir hasta la medianoche). */
   async closeBlock(blockRaw: unknown, body: any, user: string) {
     const company = companyOf(body?.company);
     const block = blockOf(blockRaw);
-    const weekOf = mondayOf(todayStr());
+    const weekOf = await this.editableDay(company);
     const current = (await models.inventoryCounts.findOne({ company, weekOf }).lean()) as any;
     if (!current?.[block]?.items?.length) throw badRequest("No hay nada contado en este bloque todavía.");
     if (current[block].status === "closed") return this.countView(current, weekOf, company);
@@ -294,6 +332,23 @@ export class InventoryService {
       .findOneAndUpdate(
         { company, weekOf },
         { $set: { [`${block}.status`]: "closed", [`${block}.closedAt`]: new Date(), [`${block}.closedBy`]: user } },
+        { new: true }
+      )
+      .lean();
+    return this.countView(doc, weekOf, company);
+  }
+
+  /** Reabre un bloque cerrado para corregirlo. Solo el mismo día de la toma. */
+  async reopenBlock(blockRaw: unknown, body: any, user: string) {
+    const company = companyOf(body?.company);
+    const block = blockOf(blockRaw);
+    const weekOf = await this.editableDay(company);
+    const current = (await models.inventoryCounts.findOne({ company, weekOf }).lean()) as any;
+    if (!current || current[block]?.status !== "closed") return this.countView(current, weekOf, company);
+    const doc = await models.inventoryCounts
+      .findOneAndUpdate(
+        { company, weekOf },
+        { $set: { [`${block}.status`]: "open", [`${block}.reopenedAt`]: new Date(), [`${block}.reopenedBy`]: user } },
         { new: true }
       )
       .lean();
