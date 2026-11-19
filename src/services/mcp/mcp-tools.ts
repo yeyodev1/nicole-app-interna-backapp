@@ -299,20 +299,22 @@ export function buildMcpServer(userEmail: string) {
     {
       title: "Operaciones por local",
       description:
-        "Por local y día: si la isla registró la Recepción Masiva de los despachos de reposición que llegan ese día " +
-        "y si envió el Cierre de Producción de ese día. Sirve para comprobar que cada local usa esas pantallas de la app.",
+        "Por local y día, con anomalías: despacho del CDP (pedido de reposición vs. despachado), Recepción Masiva de la isla " +
+        "(registrada o no, faltantes y dañados) y Cierre de Producción del día (enviado o no, productos sin reporte y bajas). " +
+        "Panel de gestión para comprobar que cada local usa esas pantallas de la app.",
       inputSchema: { fecha: YMD },
       annotations: READ_ONLY,
     },
     async ({ fecha }: any) => {
       const [y, m, d] = fecha.split("-").map(Number);
       const day = new Date(Date.UTC(y!, m! - 1, d!));
+      const MAX = 60; // tope de anomalías por lista
       const [restocks, cierres]: [any[], any[]] = await Promise.all([
         models.orders
           .find({ ...range(fecha, fecha, "entrega"), ...NOT_VOID, salesChannel: { $in: ["Restock", "Restock-Bodega"] } })
-          .select("branch salesChannel contificoSource dispatchStatus dispatches.receptionStatus dispatches.reportedAt dispatches.receivedAt dispatches.receivedBy dispatches.receptionNotes")
+          .select("branch salesChannel dispatchStatus products._id products.name products.quantity dispatches")
           .lean(),
-        models.posDailyEntries.find({ date: day }).select("branch status submittedAt submittedBy items.stockFinal").lean(),
+        models.posDailyEntries.find({ date: day }).select("branch status submittedAt submittedBy items.productName items.stockFinal items.bajas items.bajasNote").lean(),
       ]);
 
       const locales: Record<string, any> = {};
@@ -320,17 +322,51 @@ export function buildMcpServer(userEmail: string) {
         const k = String(branch || "Sin sucursal").trim();
         return (locales[k.toLowerCase()] ||= {
           sucursal: k,
-          recepcion: { despachos: 0, registrados: 0, con_problema: 0, pendientes: 0, ultima: null, por: null, notas: [] as string[] },
-          cierre: { enviado: false, hora: null, por: null, productos: 0, sin_reporte: 0 },
+          despacho: { pedidos: [] as any[], anomalias: [] as any[] },
+          recepcion: { despachos: 0, registrados: 0, con_problema: 0, pendientes: 0, ultima: null, por: null, notas: [] as string[], anomalias: [] as any[] },
+          cierre: { enviado: false, hora: null, por: null, productos: 0, sin_reporte: 0, productos_sin_reporte: [] as string[], bajas: [] as any[] },
         });
       };
 
       for (const o of restocks) {
-        const r = local(o.branch).recepcion;
+        const L = local(o.branch);
+        const r = L.recepcion;
+        L.despacho.pedidos.push({ id: String(o._id), canal: o.salesChannel, estado: o.dispatchStatus });
+
+        // Despacho: pedido de reposición vs. lo que el CDP registró como despachado
+        const sent: Record<string, number> = {};
+        const keyOf = (id: any, name: any) => String(id || name || "").toLowerCase();
+        const byId: Record<string, string> = {};
+        for (const p of o.products || []) byId[String(p._id)] = String(p.name || "").toLowerCase();
+        for (const disp of o.dispatches || [])
+          for (const it of disp.items || []) {
+            const k = byId[String(it.productId)] ?? keyOf(null, it.name);
+            sent[k] = (sent[k] || 0) + (Number(it.quantitySent) || 0);
+          }
+        const seen = new Set<string>();
+        for (const p of o.products || []) {
+          const k = String(p.name || "").toLowerCase();
+          seen.add(k);
+          const pedido = Number(p.quantity) || 0, env = sent[k] || 0;
+          if (env !== pedido && L.despacho.anomalias.length < MAX)
+            L.despacho.anomalias.push({ producto: p.name, pedido, despachado: env, tipo: env === 0 ? "no despachado" : env < pedido ? "faltó" : "de más" });
+        }
+        for (const disp of o.dispatches || [])
+          for (const it of disp.items || []) {
+            const k = byId[String(it.productId)] ?? keyOf(null, it.name);
+            if (!seen.has(k) && L.despacho.anomalias.length < MAX) {
+              seen.add(k);
+              L.despacho.anomalias.push({ producto: it.name, pedido: 0, despachado: sent[k], tipo: "no estaba en el pedido" });
+            }
+          }
+
+        // Recepción Masiva
         for (const disp of o.dispatches || []) {
           r.despachos++;
           if (disp.receptionStatus === "PENDING" || !disp.receptionStatus) {
             r.pendientes++;
+            if (r.anomalias.length < MAX)
+              r.anomalias.push({ tipo: "no registrado", despachado: ecDateTime(disp.reportedAt), productos: (disp.items || []).length });
             continue;
           }
           r.registrados++;
@@ -341,6 +377,13 @@ export function buildMcpServer(userEmail: string) {
             r.por = disp.receivedBy || null;
           }
           if (disp.receptionNotes) r.notas.push(String(disp.receptionNotes).slice(0, 200));
+          for (const it of disp.items || []) {
+            const rec = it.quantityReceived ?? it.quantitySent;
+            if ((it.itemStatus && it.itemStatus !== "OK") || rec !== it.quantitySent) {
+              if (r.anomalias.length < MAX)
+                r.anomalias.push({ tipo: it.itemStatus || "diferencia", producto: it.name, enviado: it.quantitySent, recibido: rec, nota: it.itemNote || null });
+            }
+          }
         }
       }
 
@@ -351,12 +394,18 @@ export function buildMcpServer(userEmail: string) {
         c.hora = ecDateTime(e.submittedAt);
         c.por = e.submittedBy || null;
         c.productos = items.length;
-        c.sin_reporte = items.filter((i: any) => i.stockFinal == null).length;
+        const sinRep = items.filter((i: any) => i.stockFinal == null);
+        c.sin_reporte = sinRep.length;
+        c.productos_sin_reporte = sinRep.slice(0, MAX).map((i: any) => i.productName);
+        c.bajas = items
+          .filter((i: any) => Number(i.bajas) > 0)
+          .slice(0, MAX)
+          .map((i: any) => ({ producto: i.productName, cantidad: i.bajas, nota: i.bajasNote || null }));
       }
 
       return json({
         fecha,
-        nota: "recepcion = despachos de reposición con entrega ese día; cierre = Cierre de Producción de ese día (el que pide la reposición del día siguiente).",
+        nota: "despacho/recepcion = reposición con entrega ese día; cierre = Cierre de Producción de ese día (pide la reposición del día siguiente). Listas de anomalías con tope de 60.",
         locales: Object.values(locales).sort((a: any, b: any) => a.sucursal.localeCompare(b.sucursal)),
       });
     }
