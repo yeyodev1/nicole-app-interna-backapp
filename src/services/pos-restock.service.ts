@@ -9,6 +9,7 @@ import { normalizeString } from "../utils/string.utils";
 import { buildContificoCategoryMaps, resolveProduct } from "../utils/contifico-categorias.util";
 import { receptionDayOf, receptionCandidatesQuery } from "../utils/reception-day.util";
 import { NOT_DISCARDED } from "../utils/reserva";
+import { BranchCompany, normalizeCompany, REQUISITION_BRAND } from "../utils/branch-company";
 
 // Day-of-week index (getUTCDay) → objectives key
 const DOW_KEYS: (keyof WeeklyObjectives)[] = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
@@ -465,6 +466,9 @@ export class POSRestockService {
     // Orden 1: el cierre se guarda con el nombre oficial de branches; si no existe, como llega.
     const officialBranch: any = await models.branches.findOne({ name: branchMatch(branch.trim()) }).lean();
     if (officialBranch) branch = officialBranch.name;
+    // Empresa de la sucursal (Puntos de Venta): la reposición y el requerimiento a Bodega
+    // quedan a nombre de esa empresa (Entre Ríos = Sucrée). Sin sucursal o sin campo: Nicole.
+    const company: BranchCompany = normalizeCompany(officialBranch?.company) || "nicole";
 
     const date = parseDateStr(dateStr);
     const entregaDate = new Date(date.getTime() + 24 * 3600000); // reposición: día siguiente al cierre
@@ -618,6 +622,7 @@ export class POSRestockService {
             paymentMethod: "Interno",
             responsible: "Web",
             invoiceNeeded: false,
+            contificoSource: company,
             productionStage: "PENDING",
             comments: roundLabel,
             products: roundItems.map((item) => ({
@@ -663,6 +668,7 @@ export class POSRestockService {
             paymentMethod: "Interno",
             responsible: "Web",
             invoiceNeeded: false,
+            contificoSource: company,
             productionStage: "PENDING",
             products: catItems.map((item) => ({
               name: item.productName,
@@ -698,6 +704,7 @@ export class POSRestockService {
         neededForDate: date,
         items: restockItems.filter((i) => i.category === "Bodega"),
         objectiveMap,
+        brand: REQUISITION_BRAND[company],
         submittedBy,
         requestedByUserId,
       });
@@ -726,10 +733,11 @@ export class POSRestockService {
     neededForDate: Date;
     items: Array<{ productName: string; unit: string; pedidoFinal: number }>;
     objectiveMap: Record<string, any>;
+    brand: string;
     submittedBy: string;
     requestedByUserId?: string;
   }): Promise<void> {
-    const { branch, closingDate, neededForDate, items, objectiveMap, submittedBy, requestedByUserId } = params;
+    const { branch, closingDate, neededForDate, items, objectiveMap, brand, submittedBy, requestedByUserId } = params;
 
     const existing = await models.internalRequisitions.findOne({
       source: "POS_CLOSING",
@@ -787,6 +795,7 @@ export class POSRestockService {
       requestedBy: requestedByUserId || undefined,
       requestedByName: submittedBy && submittedBy !== "POS User" ? `${submittedBy} · ${branch}` : `Cierre POS · ${branch}`,
       area: `Punto de venta ${branch}`,
+      brand, // marca a la que se carga el gasto: la empresa de la sucursal
       neededForDate,
       items: reqItems,
       notes,
