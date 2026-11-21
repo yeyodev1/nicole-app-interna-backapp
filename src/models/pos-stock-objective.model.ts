@@ -11,7 +11,8 @@ export type WeeklyObjectives = {
 };
 
 export interface IPOSStockObjective extends Document {
-  branch: "San Marino" | "Mall del Sol" | "Centro de Producción";
+  /** Nombre oficial de la sucursal (Puntos de Venta). Antes era una lista fija sin Entre Ríos. */
+  branch: string;
   productName: string;
   unit: string;
   contificoId?: string;
@@ -25,7 +26,6 @@ const POSStockObjectiveSchema = new Schema<IPOSStockObjective>(
   {
     branch: {
       type: String,
-      enum: ["San Marino", "Mall del Sol", "Centro de Producción"],
       required: true,
     },
     productName: { type: String, required: true },

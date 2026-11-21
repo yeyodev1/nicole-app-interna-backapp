@@ -8,18 +8,24 @@ import { Branch } from "./models/branch.model";
 import { SellerModel } from "./models/seller.model";
 
 const DEFAULT_BRANCHES = [
-  { name: "San Marino",          sortOrder: 1 },
-  { name: "Mall del Sol",        sortOrder: 2 },
-  { name: "Entre Ríos",          sortOrder: 3 },
-  { name: "Centro de Producción", sortOrder: 4 },
+  { name: "San Marino",          sortOrder: 1, company: "nicole" },
+  { name: "Mall del Sol",        sortOrder: 2, company: "nicole" },
+  { name: "Entre Ríos",          sortOrder: 3, company: "sucree" },
+  { name: "Centro de Producción", sortOrder: 4, company: "nicole" },
 ];
 
 async function seedBranches() {
   for (const branch of DEFAULT_BRANCHES) {
     await Branch.updateOne(
       { name: branch.name },
-      { $setOnInsert: { name: branch.name, isActive: true, sortOrder: branch.sortOrder } },
+      { $setOnInsert: { name: branch.name, isActive: true, sortOrder: branch.sortOrder, company: branch.company } },
       { upsert: true }
+    );
+    // Sucursales creadas antes del campo `company` (21/11/2026): solo se completa si falta;
+    // nunca pisa lo que el Jefe de Operaciones haya elegido en Puntos de Venta.
+    await Branch.updateOne(
+      { name: branch.name, company: { $exists: false } },
+      { $set: { company: branch.company } }
     );
   }
   console.log("Default branches ensured.");

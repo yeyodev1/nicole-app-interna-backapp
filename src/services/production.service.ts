@@ -3,6 +3,8 @@ import { OrderModel } from "../models/order.model";
 import CustomError from "../errors/customError.error";
 import { getECDateRange, getEcuadorNow } from "../utils/date.utils";
 import { NOT_DISCARDED } from "../utils/reserva";
+import { Branch } from "../models/branch.model";
+import { exactNameRegex, isCdpBranch } from "../utils/branch-company";
 
 /**
  * Orden de reparto de la reposición: "Primera Entrega" primero, luego las siguientes.
@@ -944,12 +946,16 @@ export class ProductionService {
       throw new CustomError("Falta el día del despacho (YYYY-MM-DD).", 400);
     }
 
-    let branch: RegExp | null = null;
-    if (/marino/i.test(destination)) branch = /marino/i;
-    else if (/(mall|sol)/i.test(destination)) branch = /(mall|sol)/i;
-    if (!branch) {
-      throw new CustomError(`La reposición solo se despacha a San Marino o Mall del Sol (recibido: ${destination}).`, 400);
+    // Cualquier punto de venta activo de Puntos de Venta (no el CDP), de cualquier empresa:
+    // Entre Ríos (Sucrée) se despacha igual que San Marino y Mall del Sol (21/11/2026).
+    // Antes la lista era fija (5d82509) y respondía 400 a todo local que no fuera esos dos.
+    const official: any = destination?.trim()
+      ? await Branch.findOne({ name: exactNameRegex(destination), isActive: { $ne: false } }).lean()
+      : null;
+    if (!official || isCdpBranch(official.name)) {
+      throw new CustomError(`La reposición solo se despacha a un punto de venta activo (recibido: ${destination}).`, 400);
     }
+    const branch = exactNameRegex(official.name);
 
     const { startDate, endDate } = getECDateRange(date, false);
     const orders = await OrderModel.find({
