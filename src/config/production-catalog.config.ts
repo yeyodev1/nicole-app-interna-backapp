@@ -1,5 +1,7 @@
-// Catálogo del Ingreso de producción: listado de Ricardo Peña (LISTADO DE PRODUCTOS NPA - SUCREE.xls, 10/11/2026).
+// Listado inicial de producto terminado: listado de Ricardo Peña (LISTADO DE PRODUCTOS NPA - SUCREE.xls, 10/11/2026).
 // Sin bebidas (no se producen en planta) ni tortas enteras (todo sale de la torta y se porciona).
+// Solo se usa para crear el catálogo general la primera vez (inventory.service.ts → defaultCatalog).
+// La lista vigente del Ingreso de producción y del inventario es el catálogo general de Ajustes.
 export type ProductionCompany = "nicole" | "sucree";
 
 export interface ProductionCatalogItem {

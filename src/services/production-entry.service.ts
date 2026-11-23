@@ -1,8 +1,8 @@
 import { models } from "../models";
 import { ContificoService } from "./contifico.service";
 import { getEcuadorNow } from "../utils/date.utils";
+import { inventoryService } from "./inventory.service";
 import {
-  PRODUCTION_CATALOG,
   PRODUCTION_AREAS,
   DEFAULT_PRODUCTION_OPERATORS,
   PRODUCTION_RULES,
@@ -48,8 +48,12 @@ const mondayOf = (s: string) => {
   return addDays(s, -dow);
 };
 
-const catalogIndex = (company: ProductionCompany) =>
-  new Map(PRODUCTION_CATALOG[company].map((p) => [p.code.toLowerCase(), p]));
+/**
+ * Lista de la tablet = bloque "Producto terminado" del catálogo general (Ajustes), el mismo de la
+ * toma de inventario. Ya no hay lista fija: lo que se agrega en Ajustes aparece aquí.
+ */
+const catalogIndex = async (company: ProductionCompany) =>
+  new Map((await inventoryService.productionCatalog(company)).map((p) => [p.code.toLowerCase(), p]));
 
 export class ProductionEntryService {
   private contifico = {
@@ -70,6 +74,10 @@ export class ProductionEntryService {
   /** Lo que necesita la tablet: operarios activos, áreas y catálogo por empresa. */
   async getTabletData() {
     await this.ensureDefaults();
+    const [nicole, sucree] = await Promise.all([
+      inventoryService.productionCatalog("nicole"),
+      inventoryService.productionCatalog("sucree"),
+    ]);
     const operators = (await models.productionOperators
       .find({ active: true })
       .sort({ name: 1 })
@@ -79,7 +87,7 @@ export class ProductionEntryService {
       today: todayStr(),
       operators: operators.map((o) => ({ id: String(o._id), name: o.name })),
       areas: PRODUCTION_AREAS,
-      catalog: PRODUCTION_CATALOG,
+      catalog: { nicole, sucree },
       rules: { freeDaysPerWeek: PRODUCTION_RULES.freeDaysPerWeek, finePerDay: PRODUCTION_RULES.finePerDay },
     };
   }
@@ -99,7 +107,7 @@ export class ProductionEntryService {
     if (!operator) throw badRequest("Ese operario no está en la lista. Pide al Jefe de Operaciones que lo agregue.");
 
     if (!Array.isArray(items) || items.length === 0) throw badRequest("Agrega al menos un producto.");
-    const index = catalogIndex(company);
+    const index = await catalogIndex(company);
     const merged = new Map<string, { code: string; name: string; category: string; quantity: number }>();
     for (const it of items) {
       const product = index.get(String(it?.code || "").toLowerCase());

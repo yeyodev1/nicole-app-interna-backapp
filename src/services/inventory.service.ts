@@ -1,6 +1,7 @@
 import { Types } from "mongoose";
 import { models } from "../models";
 import { getEcuadorNow } from "../utils/date.utils";
+import { ContificoService } from "./contifico.service";
 import { PRODUCTION_CATALOG } from "../config/production-catalog.config";
 import {
   InventoryCompany,
@@ -25,6 +26,8 @@ import {
  *   (también los bloques que quedaron abiertos) y se empieza una toma nueva con el botón.
  *   Las tomas guardadas antes del 19/11/2026 tienen como fecha el lunes de su semana.
  * - El catálogo (categorías, productos, unidades) lo edita el Jefe de Operaciones en Ajustes.
+ *   Es el catálogo general: el bloque "Producto terminado" es también la lista del Ingreso de
+ *   producción (tablet). Sus códigos deben existir en Contífico de la empresa (se valida al guardar).
  */
 
 const badRequest = (message: string) => Object.assign(new Error(message), { status: 400 });
@@ -100,6 +103,39 @@ const catalogView = (c: any) => ({
 });
 
 export class InventoryService {
+  private contifico = {
+    nicole: new ContificoService("nicole"),
+    sucree: new ContificoService("sucree"),
+  };
+
+  /**
+   * Productos del bloque "Producto terminado" en una lista plana: es lo que ofrece y acepta el
+   * Ingreso de producción. Mismo catálogo que la toma de inventario, así siempre coinciden.
+   */
+  async productionCatalog(companyRaw: unknown): Promise<Array<{ code: string; name: string; category: string }>> {
+    const catalog = await this.getCatalog(companyRaw);
+    const pt = catalog.blocks.find((b) => b.key === "pt");
+    return (pt?.categories || []).flatMap((cat: any) =>
+      (cat.products || []).map((p: any) => ({ code: p.code, name: p.name, category: cat.name }))
+    );
+  }
+
+  /**
+   * Códigos de "Producto terminado" que no existen en Contífico de la empresa.
+   * Devuelve null si Contífico no responde: en ese caso se guarda igual y se avisa.
+   */
+  private async codesMissingInContifico(company: InventoryCompany, codes: string[]): Promise<string[] | null> {
+    if (!codes.length) return [];
+    try {
+      const products: any[] = (await this.contifico[company].getCachedProducts()) || [];
+      if (!products.length) return null;
+      const known = new Set(products.map((p) => keyOf(String(p?.codigo || ""))).filter(Boolean));
+      return codes.filter((c) => !known.has(keyOf(c)));
+    } catch {
+      return null;
+    }
+  }
+
   /** Catálogo de la empresa; si todavía no existe, se crea con el listado inicial. */
   async getCatalog(companyRaw: unknown) {
     const company = companyOf(companyRaw);
@@ -158,6 +194,19 @@ export class InventoryService {
       return { key, title, categories };
     });
 
+    // Producto terminado = lista de la tablet de producción: cada código debe existir en Contífico.
+    const ptCodes = blocks
+      .find((b) => b.key === "pt")!
+      .categories.flatMap((c) => c.products.map((p) => p.code));
+    const missing = await this.codesMissingInContifico(company, ptCodes);
+    if (missing && missing.length) {
+      const empresa = company === "nicole" ? "Nicole" : "Sucrée";
+      throw badRequest(
+        `Estos códigos de Producto terminado no existen en Contífico de ${empresa}: ${missing.join(", ")}. ` +
+          `Copia el código tal cual está en Contífico (o quita el producto) y vuelve a guardar.`
+      );
+    }
+
     const doc = await models.inventoryCatalogs
       .findOneAndUpdate(
         { company },
@@ -165,7 +214,13 @@ export class InventoryService {
         { upsert: true, new: true, setDefaultsOnInsert: true }
       )
       .lean();
-    return catalogView(doc);
+    return {
+      ...catalogView(doc),
+      aviso:
+        missing === null && ptCodes.length
+          ? "Guardado, pero Contífico no respondió y no se pudieron revisar los códigos. Revísalos cuando vuelva."
+          : null,
+    };
   }
 
   /** Utensilios activos de la empresa, con su foto. */
