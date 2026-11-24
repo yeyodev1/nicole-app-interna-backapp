@@ -4,7 +4,12 @@ import { normalizeString } from "../utils/string.utils";
 import { RESTOCK_CHANNELS } from "../utils/future-sales.util";
 import { buildContificoCategoryMaps, resolveProduct } from "../utils/contifico-categorias.util";
 import { ContificoService } from "./contifico.service";
-import { InventoryCompany, INVENTORY_COMPANIES, INVENTORY_BLOCK_TITLES } from "../config/inventory.config";
+import {
+  InventoryCompany,
+  INVENTORY_COMPANIES,
+  INVENTORY_BLOCK_TITLES,
+  INVENTORY_MOVEMENT_START,
+} from "../config/inventory.config";
 
 /**
  * Movimiento de inventario (solo producto terminado). Solo lectura: no guarda nada.
@@ -12,6 +17,9 @@ import { InventoryCompany, INVENTORY_COMPANIES, INVENTORY_BLOCK_TITLES } from ".
  * Pedido de Operaciones (Mauro, 23/11/2026). Cada toma de inventario cierra el periodo anterior:
  *   debería haber = toma de inicio + producción (tablet) − despachos (islas y pedidos)
  *   diferencia    = lo contado en la toma siguiente − debería haber
+ *
+ * Empieza con la toma del lunes 23/11/2026 (INVENTORY_MOVEMENT_START): las tomas anteriores no se
+ * muestran ni se pueden pedir.
  *
  * Reglas:
  * - El periodo empieza cuando se cierra el bloque "Producto terminado" de su toma y termina cuando
@@ -81,7 +89,7 @@ export class InventoryMovementService {
   async getPeriods(companyRaw: unknown) {
     const company = companyOf(companyRaw);
     const counts = (await models.inventoryCounts
-      .find({ company })
+      .find({ company, weekOf: { $gte: INVENTORY_MOVEMENT_START } })
       .sort({ weekOf: -1 })
       .limit(MAX_PERIODS + 1)
       .select("weekOf responsible pt.status pt.closedAt createdAt")
@@ -104,10 +112,16 @@ export class InventoryMovementService {
     const company = companyOf(companyRaw);
     const fromIn = String(fromRaw || "").trim();
     if (fromIn && !/^\d{4}-\d{2}-\d{2}$/.test(fromIn)) throw badRequest("Fecha de la toma no válida.");
+    if (fromIn && fromIn < INVENTORY_MOVEMENT_START) {
+      throw badRequest(`El movimiento de inventario empieza con la toma del ${INVENTORY_MOVEMENT_START}.`);
+    }
 
     const startCount: any = fromIn
       ? await models.inventoryCounts.findOne({ company, weekOf: fromIn }).lean()
-      : await models.inventoryCounts.findOne({ company }).sort({ weekOf: -1 }).lean();
+      : await models.inventoryCounts
+          .findOne({ company, weekOf: { $gte: INVENTORY_MOVEMENT_START } })
+          .sort({ weekOf: -1 })
+          .lean();
     if (!startCount) {
       if (fromIn) throw badRequest(`No hay toma de inventario del ${fromIn}.`);
       return { company, empty: true as const };
