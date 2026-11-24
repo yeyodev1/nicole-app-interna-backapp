@@ -14,6 +14,7 @@ import {
   INVENTORY_DEFAULT_UNIT,
   INVENTORY_DEFAULT_UNITS,
   INVENTORY_RULES,
+  INVENTORY_COUNT_WEEKDAY,
 } from "../config/inventory.config";
 
 /**
@@ -21,6 +22,7 @@ import {
  * - Productos en tres bloques: producto terminado (pt), en proceso (pp) y materia prima (mp).
  * - Utensilios (ut): cada uno con foto; cada toma se compara con las anteriores.
  * - Se puede pasar de un bloque a otro sin cerrarlo.
+ * - Solo los lunes se empieza una toma (pedido de Operaciones, 23/11/2026): una por lunes y empresa.
  * - Una toma por día y empresa (`weekOf` = fecha de la toma, hora de Ecuador). Ese mismo día un
  *   bloque cerrado se puede reabrir para corregir. Desde la medianoche la toma queda bloqueada
  *   (también los bloques que quedaron abiertos) y se empieza una toma nueva con el botón.
@@ -37,6 +39,9 @@ const keyOf = (v: string) => clean(v).toLowerCase();
 
 const todayStr = () => getEcuadorNow().toISOString().split("T")[0];
 const dm = (s: string) => `${s.slice(8, 10)}/${s.slice(5, 7)}`;
+/** ¿La fecha AAAA-MM-DD es día de toma (lunes)? */
+const isCountDay = (s: string) => new Date(`${s}T12:00:00.000Z`).getUTCDay() === INVENTORY_COUNT_WEEKDAY;
+const NOT_COUNT_DAY = "La toma de inventario se hace solo los lunes.";
 
 function companyOf(v: unknown): InventoryCompany {
   const c = String(v || "").toLowerCase() as InventoryCompany;
@@ -273,8 +278,13 @@ export class InventoryService {
     const today = todayStr();
     const last = await this.latest(company);
     if (last && last.weekOf !== today) {
-      throw badRequest(`La toma del ${dm(last.weekOf)} ya no se puede modificar. Empieza una nueva toma de inventario.`);
+      throw badRequest(
+        isCountDay(today)
+          ? `La toma del ${dm(last.weekOf)} ya no se puede modificar. Empieza una nueva toma de inventario.`
+          : `La toma del ${dm(last.weekOf)} ya no se puede modificar. ${NOT_COUNT_DAY}`
+      );
     }
+    if (!last && !isCountDay(today)) throw badRequest(NOT_COUNT_DAY);
     return today;
   }
 
@@ -296,12 +306,16 @@ export class InventoryService {
         weekOf: c.weekOf,
         utensils: Object.fromEntries((c.ut?.items || []).map((i: any) => [String(i.utensil), i.quantity])),
       }));
-    const editable = weekOf === today;
+    const editable = weekOf === today && (!!last || isCountDay(today));
     return {
       today,
       weekOf,
       editable,
-      canStartNew: !editable,
+      canStartNew: !editable && isCountDay(today),
+      /** Hoy es lunes (día de toma). */
+      countDay: isCountDay(today),
+      /** Ya existe al menos una toma de la empresa. */
+      hasCount: !!last,
       count: this.countView(last, weekOf, company),
       utensils,
       history,
@@ -313,6 +327,7 @@ export class InventoryService {
     const company = companyOf(body?.company);
     const today = todayStr();
     const last = await this.latest(company);
+    if ((!last || last.weekOf !== today) && !isCountDay(today)) throw badRequest(NOT_COUNT_DAY);
     if (!last || last.weekOf !== today) {
       await models.inventoryCounts.create({ company, weekOf: today }).catch((e: any) => {
         if (e?.code !== 11000) throw e; // otra persona la empezó al mismo tiempo

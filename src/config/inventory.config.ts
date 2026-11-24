@@ -30,6 +30,18 @@ export const INVENTORY_COUNT_ROLES = ["PRODUCTION", "OPERATIONS_MANAGER", "SUPER
 /** Ajustes del catálogo: solo el Jefe de Operaciones (y administradores). */
 export const INVENTORY_SETTINGS_ROLES = ["OPERATIONS_MANAGER", "SUPERADMIN", "ADMIN"];
 
+/**
+ * La toma de inventario se hace solo los lunes (pedido de Operaciones, 23/11/2026). Cada toma
+ * cierra la semana anterior del Movimiento de inventario.
+ */
+export const INVENTORY_COUNT_WEEKDAY = 1; // lunes (getUTCDay sobre la fecha de Ecuador)
+
+/**
+ * El Movimiento de inventario empieza con la toma del lunes 23/11/2026 (ese día se empezó a
+ * registrar la producción en la tablet). Lo anterior no se muestra.
+ */
+export const INVENTORY_MOVEMENT_START = "2026-11-23";
+
 export const INVENTORY_RULES = {
   /** Columnas de conteos anteriores que se muestran en utensilios. */
   historyWeeks: 3,
