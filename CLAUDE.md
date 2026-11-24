@@ -51,7 +51,7 @@ All routes are mounted under `/api` prefix. The flow is:
 | `/provider-categories` | Supplier categorization |
 | `/warehouse` | Warehouse/stock movements |
 | `/sellers` | Vendedores asignables a la factura (comisiones) |
-| `/inventory` | Toma de inventario (una por día): catálogo, conteo por bloques y utensilios con foto. El mismo día se reabre un bloque cerrado (`POST /week/blocks/:block/reopen`); desde la medianoche se empieza otra toma (`POST /week/new`) |
+| `/inventory` | Toma de inventario (una por día): catálogo, conteo por bloques y utensilios con foto. El mismo día se reabre un bloque cerrado (`POST /week/blocks/:block/reopen`); desde la medianoche se empieza otra toma (`POST /week/new`). Movimiento de inventario, solo lectura (`GET /movement/periods`, `GET /movement?from=`): producto terminado de una toma a la siguiente, + Ingreso de producción − despachos (islas y pedidos) = debería haber, contra lo contado (`services/inventory-movement.service.ts`) |
 | `/web-orders` | Pedidos de la tienda online (sin JWT, header `x-api-key` = `WEB_ORDERS_API_KEY`) |
 
 ### Layered Structure
