@@ -9,6 +9,7 @@ import {
   INVENTORY_COMPANIES,
   INVENTORY_BLOCK_TITLES,
   INVENTORY_MOVEMENT_START,
+  WHOLE_CAKE_PORTIONS,
 } from "../config/inventory.config";
 
 /**
@@ -31,7 +32,8 @@ import {
  *   clientes. "Restock-Bodega" no es producto terminado y no se cuenta.
  * - Cada línea despachada se identifica por el código de Contífico del producto del pedido
  *   (contifico_id → código) o, si no, por el nombre. Lo que no está en el catálogo de Producto
- *   terminado (por ejemplo tortas enteras) no se resta: se informa aparte.
+ *   terminado no se resta: se informa aparte. Las tortas enteras de WHOLE_CAKE_PORTIONS se restan
+ *   como porciones de su sabor (10 por torta; Keto 8), porque la tablet y la toma llevan porciones.
  * - De la toma solo se usa lo contado en la unidad del producto en el catálogo.
  */
 
@@ -209,6 +211,7 @@ export class InventoryMovementService {
 
     const maps = await buildContificoCategoryMaps(this.contifico[company]);
     const unmatched = { lines: 0, units: 0, names: [] as string[] };
+    const wholeCakes = { cakes: 0, portions: 0 };
     for (const o of orders) {
       const toIslands = o.salesChannel === RESTOCK_CHANNELS[0];
       const productsById = new Map((o.products || []).map((p: any) => [String(p._id), p]));
@@ -222,7 +225,16 @@ export class InventoryMovementService {
           const p: any = productsById.get(String(it.productId));
           const name = String(p?.name || it.name || "");
           const codigo = resolveProduct(maps, name, p?.contifico_id).codigo;
-          const k = (codigo && rows.has(keyOf(codigo)) ? keyOf(codigo) : null) || byName.get(keyOf(name)) || null;
+          let k = (codigo && rows.has(keyOf(codigo)) ? keyOf(codigo) : null) || byName.get(keyOf(name)) || null;
+          let units = qty;
+          // Torta entera: se resta como porciones de su sabor (si esa porción está en el catálogo).
+          const cake = !k && codigo ? WHOLE_CAKE_PORTIONS[company][String(codigo).toUpperCase()] : undefined;
+          if (cake && rows.get(keyOf(cake.portion))?.inCatalog) {
+            k = keyOf(cake.portion);
+            units = qty * cake.portions;
+            wholeCakes.cakes += qty;
+            wholeCakes.portions += units;
+          }
           const row = k ? rows.get(k) : null;
           if (!row || !row.inCatalog) {
             if (/delivery|env[ií]o/i.test(name)) continue;
@@ -231,7 +243,7 @@ export class InventoryMovementService {
             if (name && unmatched.names.length < MAX_UNMATCHED_NAMES && !unmatched.names.includes(name)) unmatched.names.push(name);
             continue;
           }
-          (toIslands ? row.toIslands : row.toOrders)[i] += qty;
+          (toIslands ? row.toIslands : row.toOrders)[i] += units;
         }
       }
     }
@@ -279,6 +291,7 @@ export class InventoryMovementService {
       today: getEcuadorNow().toISOString().slice(0, 10),
       categories,
       unmatched,
+      wholeCakes,
     };
   }
 }
