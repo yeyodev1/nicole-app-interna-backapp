@@ -3,6 +3,8 @@ import { authMiddleware } from "../middlewares/auth.middleware";
 import {
   getTabletData,
   createProductionEntry,
+  getProductionDay,
+  updateProductionEntry,
   getProductionHistory,
   listProductionOperators,
   addProductionOperator,
@@ -16,9 +18,11 @@ router.use(authMiddleware as any);
 
 router.get("/tablet", getTabletData);
 router.post("/", createProductionEntry);
+router.get("/day", getProductionDay);
 router.get("/history", getProductionHistory);
 router.get("/operators", listProductionOperators);
 router.post("/operators", addProductionOperator);
 router.delete("/operators/:id", removeProductionOperator);
+router.patch("/:id", updateProductionEntry);
 
 export default router;
