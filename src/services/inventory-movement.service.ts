@@ -34,6 +34,9 @@ import {
  *   (contifico_id → código) o, si no, por el nombre. Lo que no está en el catálogo de Producto
  *   terminado no se resta: se informa aparte. Las tortas enteras de WHOLE_CAKE_PORTIONS se restan
  *   como porciones de su sabor (10 por torta; Keto 8), porque la tablet y la toma llevan porciones.
+ * - Recibido en islas (Mauro, 25/11/2026): de los despachos de reposición del periodo, solo los que la
+ *   isla ya marcó (RECEIVED o PROBLEM), lo recibido y lo enviado en esos mismos despachos, para ver
+ *   cuánto no llegó. Lo que la isla no ha marcado no se cuenta. Solo informa: no cambia el cálculo.
  * - De la toma solo se usa lo contado en la unidad del producto en el catálogo.
  */
 
@@ -79,6 +82,10 @@ interface ProductRow {
   produced: number[];
   toIslands: number[];
   toOrders: number[];
+  /** Recibido por las islas en los despachos de reposición ya marcados. */
+  islandsReceived: number;
+  /** Enviado en esos mismos despachos marcados (para calcular lo que no llegó). */
+  islandsReceivedSent: number;
 }
 
 export class InventoryMovementService {
@@ -157,6 +164,8 @@ export class InventoryMovementService {
       produced: days.map(() => 0),
       toIslands: days.map(() => 0),
       toOrders: days.map(() => 0),
+      islandsReceived: 0,
+      islandsReceivedSent: 0,
     });
     for (const cat of ptBlock?.categories || []) {
       for (const p of cat.products || []) {
@@ -206,7 +215,7 @@ export class InventoryMovementService {
         salesChannel: { $ne: RESTOCK_CHANNELS[1] },
         dispatches: { $elemMatch: { reportedAt: { $gt: startAt, $lte: endAt } } },
       })
-      .select("salesChannel products._id products.name products.contifico_id dispatches.reportedAt dispatches.items")
+      .select("salesChannel products._id products.name products.contifico_id dispatches.reportedAt dispatches.items dispatches.receptionStatus")
       .lean()) as any[];
 
     const maps = await buildContificoCategoryMaps(this.contifico[company]);
@@ -219,6 +228,7 @@ export class InventoryMovementService {
         const at = d.reportedAt ? new Date(d.reportedAt) : null;
         if (!at || at <= startAt || at > endAt) continue;
         const i = dayIndex(at);
+        const marked = toIslands && (d.receptionStatus === "RECEIVED" || d.receptionStatus === "PROBLEM");
         for (const it of d.items || []) {
           const qty = Number(it.quantitySent) || 0;
           if (qty <= 0) continue;
@@ -227,11 +237,13 @@ export class InventoryMovementService {
           const codigo = resolveProduct(maps, name, p?.contifico_id).codigo;
           let k = (codigo && rows.has(keyOf(codigo)) ? keyOf(codigo) : null) || byName.get(keyOf(name)) || null;
           let units = qty;
+          let factor = 1;
           // Torta entera: se resta como porciones de su sabor (si esa porción está en el catálogo).
           const cake = !k && codigo ? WHOLE_CAKE_PORTIONS[company][String(codigo).toUpperCase()] : undefined;
           if (cake && rows.get(keyOf(cake.portion))?.inCatalog) {
             k = keyOf(cake.portion);
-            units = qty * cake.portions;
+            factor = cake.portions;
+            units = qty * factor;
             wholeCakes.cakes += qty;
             wholeCakes.portions += units;
           }
@@ -244,6 +256,11 @@ export class InventoryMovementService {
             continue;
           }
           (toIslands ? row.toIslands : row.toOrders)[i] += units;
+          if (marked) {
+            const received = Math.min(qty, Math.max(0, Number(it.quantityReceived ?? qty) || 0));
+            row.islandsReceived += received * factor;
+            row.islandsReceivedSent += units;
+          }
         }
       }
     }
@@ -278,6 +295,8 @@ export class InventoryMovementService {
           produced: p.produced.map(round),
           toIslands: p.toIslands.map(round),
           toOrders: p.toOrders.map(round),
+          islandsReceived: round(p.islandsReceived),
+          islandsReceivedSent: round(p.islandsReceivedSent),
         })),
       }));
 
