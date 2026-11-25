@@ -256,6 +256,12 @@ export class InventoryMovementService {
       ...(ptBlock?.categories || []).map((c: any) => c.name as string),
       OUTSIDE,
     ];
+    // Códigos de torta entera que restan de cada porción (para mostrarlos bajo el nombre).
+    const cakeCodesOf = new Map<string, string[]>();
+    for (const [cakeCode, c] of Object.entries(WHOLE_CAKE_PORTIONS[company])) {
+      const pk = keyOf(c.portion);
+      cakeCodesOf.set(pk, [...(cakeCodesOf.get(pk) || []), cakeCode]);
+    }
     const categories = categoryOrder
       .map((name) => ({ name, products: products.filter((p) => p.category === name) }))
       .filter((c) => c.products.length)
@@ -266,6 +272,7 @@ export class InventoryMovementService {
           name: p.name,
           unit: p.unit,
           inCatalog: p.inCatalog,
+          wholeCakeCodes: cakeCodesOf.get(keyOf(p.code)) || [],
           start: round(p.start),
           counted: p.counted === null ? null : round(p.counted),
           produced: p.produced.map(round),
