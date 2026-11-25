@@ -47,6 +47,28 @@ export async function createProductionEntry(req: Request, res: Response): Promis
   }
 }
 
+/** GET /api/production-entries/day?date=AAAA-MM-DD  (fichas guardadas de un día; sin fecha = hoy) */
+export async function getProductionDay(req: Request, res: Response): Promise<void> {
+  if (!guard(req, res, TABLET_ROLES, "Solo la tablet de producción puede ver las fichas.")) return;
+  try {
+    const data = await productionEntryService.getDay(String(req.query.date || ""));
+    res.status(HttpStatusCode.Ok).send({ data });
+  } catch (error) {
+    fail(res, error, "No se pudieron cargar las fichas.");
+  }
+}
+
+/** PATCH /api/production-entries/:id  { items: [{ code, quantity }] }  (solo fichas de hoy) */
+export async function updateProductionEntry(req: Request, res: Response): Promise<void> {
+  if (!guard(req, res, TABLET_ROLES, "Solo la tablet de producción puede corregir fichas.")) return;
+  try {
+    const data = await productionEntryService.updateEntry(String(req.params.id), req.body, userOf(req));
+    res.status(HttpStatusCode.Ok).send({ message: "Ficha corregida.", data });
+  } catch (error) {
+    fail(res, error, "No se pudo guardar la corrección.");
+  }
+}
+
 /** GET /api/production-entries/history?month=AAAA-MM */
 export async function getProductionHistory(req: Request, res: Response): Promise<void> {
   if (!guard(req, res, MANAGER_ROLES, "Solo el Jefe de Operaciones puede ver el histórico.")) return;

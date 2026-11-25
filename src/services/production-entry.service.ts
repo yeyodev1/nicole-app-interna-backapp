@@ -55,6 +55,28 @@ const mondayOf = (s: string) => {
 const catalogIndex = async (company: ProductionCompany) =>
   new Map((await inventoryService.productionCatalog(company)).map((p) => [p.code.toLowerCase(), p]));
 
+/**
+ * Valida los productos contra el catálogo de la empresa y junta los repetidos.
+ * Lo usan el registro y la corrección de una ficha.
+ */
+async function normalizeItems(company: ProductionCompany, items: any) {
+  if (!Array.isArray(items) || items.length === 0) throw badRequest("Agrega al menos un producto.");
+  const index = await catalogIndex(company);
+  const merged = new Map<string, { code: string; name: string; category: string; quantity: number }>();
+  for (const it of items) {
+    const product = index.get(String(it?.code || "").toLowerCase());
+    if (!product) throw badRequest(`El producto ${it?.code ?? ""} no está en el catálogo de ${company === "nicole" ? "Nicole" : "Sucrée"}.`);
+    const quantity = Number(it?.quantity);
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 2000) {
+      throw badRequest(`Cantidad inválida para ${product.name}.`);
+    }
+    const prev = merged.get(product.code);
+    if (prev) prev.quantity += quantity;
+    else merged.set(product.code, { ...product, quantity });
+  }
+  return Array.from(merged.values());
+}
+
 export class ProductionEntryService {
   private contifico = {
     nicole: new ContificoService("nicole"),
@@ -106,21 +128,7 @@ export class ProductionEntryService {
     const operator = (await models.productionOperators.findOne({ _id: operatorId, active: true }).catch(() => null)) as any;
     if (!operator) throw badRequest("Ese operario no está en la lista. Pide al Jefe de Operaciones que lo agregue.");
 
-    if (!Array.isArray(items) || items.length === 0) throw badRequest("Agrega al menos un producto.");
-    const index = await catalogIndex(company);
-    const merged = new Map<string, { code: string; name: string; category: string; quantity: number }>();
-    for (const it of items) {
-      const product = index.get(String(it?.code || "").toLowerCase());
-      if (!product) throw badRequest(`El producto ${it?.code ?? ""} no está en el catálogo de ${company === "nicole" ? "Nicole" : "Sucrée"}.`);
-      const quantity = Number(it?.quantity);
-      if (!Number.isInteger(quantity) || quantity < 1 || quantity > 2000) {
-        throw badRequest(`Cantidad inválida para ${product.name}.`);
-      }
-      const prev = merged.get(product.code);
-      if (prev) prev.quantity += quantity;
-      else merged.set(product.code, { ...product, quantity });
-    }
-    const list = Array.from(merged.values());
+    const list = await normalizeItems(company, items);
 
     const entry = await models.productionEntries.create({
       date: todayStr(),
@@ -143,6 +151,62 @@ export class ProductionEntryService {
       operatorName: entry.operatorName,
       totalUnits: entry.totalUnits,
       createdAt: entry.createdAt,
+    };
+  }
+
+  // ───────────────────────── Fichas guardadas (tablet) ─────────────────────────
+
+  /**
+   * Fichas de un día (AAAA-MM-DD, por defecto hoy), de la más antigua a la más nueva.
+   * Solo las de hoy se pueden corregir; desde las 00:00 de Ecuador quedan cerradas.
+   */
+  async getDay(date?: string) {
+    const today = todayStr();
+    const day = /^\d{4}-\d{2}-\d{2}$/.test(String(date || "")) ? String(date) : today;
+    if (day > today) throw badRequest("No se pueden ver fichas de días que todavía no llegan.");
+    const entries = (await models.productionEntries
+      .find({ date: day })
+      .sort({ createdAt: 1 })
+      .select("date operatorName company area items totalUnits createdAt editedAt")
+      .lean()) as any[];
+    return {
+      today,
+      date: day,
+      editable: day === today,
+      entries: entries.map((e) => ({
+        id: String(e._id),
+        date: e.date,
+        operatorName: e.operatorName,
+        company: e.company,
+        area: e.area,
+        items: (e.items || []).map((i: any) => ({ code: i.code, name: i.name, category: i.category, quantity: i.quantity })),
+        totalUnits: e.totalUnits,
+        createdAt: e.createdAt,
+        editedAt: e.editedAt || null,
+      })),
+    };
+  }
+
+  /**
+   * Corrige los productos de una ficha de hoy. Cualquiera en la tablet puede hacerlo hasta las 00:00.
+   * No se guarda lo anterior: solo queda la marca de corregida (editedAt / editedBy).
+   */
+  async updateEntry(id: string, body: any, editedBy: string) {
+    const entry = (await models.productionEntries.findById(id).catch(() => null)) as any;
+    if (!entry) throw badRequest("No se encontró esa ficha. Recarga la página.");
+    if (entry.date !== todayStr()) {
+      throw badRequest("Esta ficha ya está cerrada: solo se pueden corregir las fichas de hoy. Avisa al Jefe de Operaciones.");
+    }
+    const list = await normalizeItems(entry.company, body?.items);
+    entry.items = list;
+    entry.totalUnits = list.reduce((s, i) => s + i.quantity, 0);
+    entry.editedAt = new Date();
+    entry.editedBy = editedBy;
+    await entry.save();
+    return {
+      id: String(entry._id),
+      totalUnits: entry.totalUnits,
+      editedAt: entry.editedAt,
     };
   }
 
@@ -261,6 +325,7 @@ export class ProductionEntryService {
         id: String(e._id),
         date: e.date,
         createdAt: e.createdAt,
+        editedAt: e.editedAt || null,
         operatorId: String(e.operator),
         operatorName: e.operatorName,
         company: e.company,

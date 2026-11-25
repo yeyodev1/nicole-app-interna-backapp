@@ -20,6 +20,8 @@ export interface IProductionEntry extends Document {
   items: IProductionEntryItem[];
   totalUnits: number;
   createdBy: string; // usuario de la app con el que se registró (la tablet)
+  editedAt?: Date; // última corrección (solo el mismo día, hasta las 00:00 de Ecuador)
+  editedBy?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -44,6 +46,8 @@ const ProductionEntrySchema = new Schema<IProductionEntry>(
     items: { type: [ItemSchema], required: true },
     totalUnits: { type: Number, required: true },
     createdBy: { type: String, required: true },
+    editedAt: { type: Date },
+    editedBy: { type: String },
   },
   { timestamps: true }
 );
