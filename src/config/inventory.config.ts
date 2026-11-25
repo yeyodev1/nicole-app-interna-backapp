@@ -53,3 +53,30 @@ export const INVENTORY_RULES = {
   maxUnits: 30,
   maxQuantity: 1_000_000,
 };
+
+/**
+ * Tortas enteras en el Movimiento de inventario (Ricardo, 25/11/2026).
+ * El inventario y la tablet llevan porciones: una torta entera despachada sale de las porciones
+ * de su sabor. Cada torta entera = 10 porciones; la Tarta queso KETO = 8.
+ * Código Contífico de la torta entera (CAKE-…) → porción del catálogo (CAKP-…). Los números no
+ * coinciden entre sí, por eso la tabla es explícita. Las que no están aquí (personalizada, caja
+ * degustación, tartas vascas de sabores, Tronco, Pavlova…) siguen en la nota "no se restan".
+ */
+export const WHOLE_CAKE_PORTIONS: Record<InventoryCompany, Record<string, { portion: string; portions: number }>> = {
+  nicole: {
+    "CAKE-001": { portion: "CAKP-001", portions: 10 }, // Affogato
+    "CAKE-002": { portion: "CAKP-002", portions: 10 }, // Arandanos & Nido
+    "CAKE-003": { portion: "CAKP-003", portions: 10 }, // Hazelnut
+    "CAKE-005": { portion: "CAKP-004", portions: 10 }, // Chocolate & Frutos rojos
+    "CAKE-006": { portion: "CAKP-018", portions: 10 }, // Torta Navideña
+    "CAKE-007": { portion: "CAKP-006", portions: 10 }, // Cuatro Leches
+    "CAKE-009": { portion: "CAKP-009", portions: 10 }, // Peach Melba
+    "CAKE-011": { portion: "CAKP-010", portions: 10 }, // Tarta de Queso (vasca)
+    "CAKE-013": { portion: "CAKP-012", portions: 10 }, // Tiramisu
+    "CAKE-014": { portion: "CAKP-011", portions: 8 }, // Tarta queso KETO
+    "CAKE-016": { portion: "CAKP-013", portions: 10 }, // Mango & Maracuya
+    "CAKE-018": { portion: "CAKP-019", portions: 10 }, // Fraisier
+    "CAKE-019": { portion: "CAKP-016", portions: 10 }, // Torta Salted Caramel
+  },
+  sucree: {},
+};
