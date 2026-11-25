@@ -28,6 +28,7 @@ import { ProductionEntryModel } from "./production-entry.model";
 import { InventoryCatalogModel } from "./inventory-catalog.model";
 import { InventoryUtensilModel } from "./inventory-utensil.model";
 import { InventoryCountModel } from "./inventory-count.model";
+import { InventoryMovementNoteModel } from "./inventory-movement-note.model";
 
 export const models = {
   mcpUsers: McpUserModel,
@@ -39,6 +40,7 @@ export const models = {
   inventoryCatalogs: InventoryCatalogModel,
   inventoryUtensils: InventoryUtensilModel,
   inventoryCounts: InventoryCountModel,
+  inventoryMovementNotes: InventoryMovementNoteModel,
   orders: OrderModel,
   dailySummaries: DailySummaryModel,
   users: UserModel,
