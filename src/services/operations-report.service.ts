@@ -106,11 +106,11 @@ export class OperationsReportService {
       }
     }
 
-    const branches: OperationsBranchReport[] = [];
-    for (const b of activeBranches) {
-      const report = await this.buildBranchRange(b.name, days, leftovers, lossesDocs, categoryMaps, dispatchMap);
-      if (report.salesAvailable || report.products.length > 0) branches.push(report);
-    }
+    // Sucursales en paralelo: las ventas del día se bajan una sola vez (getDaySalesByPos deduplica).
+    const reports = await Promise.all(
+      activeBranches.map((b) => this.buildBranchRange(b.name, days, leftovers, lossesDocs, categoryMaps, dispatchMap))
+    );
+    const branches = reports.filter((r) => r.salesAvailable || r.products.length > 0);
 
     return {
       date: from,

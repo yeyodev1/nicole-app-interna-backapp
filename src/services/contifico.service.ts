@@ -1,4 +1,5 @@
 import axios, { HttpStatusCode } from "axios";
+import mongoose from "mongoose";
 import { IPerson } from "../interfaces/person.interface";
 import { InvoiceSequenceModel } from "../models/invoice-sequence.model";
 import { SellerModel } from "../models/seller.model";
@@ -13,6 +14,63 @@ import {
 import { CONTIFICO_CUENTA_BANCARIA_TRA } from "../config/contifico-cobro.config";
 import { isPrecioIvaIncluido, lineDiscountPercent } from "../config/precio-final.config";
 import CustomError from "../errors/customError.error";
+
+// ── Catálogo y categorías de Contífico, compartidos por cuenta ──────────────
+// Contífico tarda ~17 s en devolver el catálogo. Antes el caché vivía dentro de
+// cada `new ContificoService()` y casi todos los servicios crean uno por llamada,
+// así que la pantalla de cocina y Operaciones lo bajaban en CADA carga.
+// Ahora: memoria del proceso + Mongo (sobrevive al arranque en frío de Vercel).
+// Pasada 1 h se responde con lo guardado y se refresca por detrás; pasadas 6 h
+// se espera a Contífico. Si Contífico falla, se sirve lo último guardado.
+const CATALOG_FRESH_MS = 3600 * 1000;
+const CATALOG_MAX_STALE_MS = 6 * 3600 * 1000;
+const catalogMem = new Map<string, { at: number; data: any[] }>();
+const catalogInflight = new Map<string, Promise<any[]>>();
+const catalogCol = () => mongoose.connection.collection<{ _id: string; at: Date; data: any[] }>("contifico_catalog_cache");
+
+export async function cachedCatalog(key: string, load: () => Promise<any>): Promise<any[]> {
+  let hit = catalogMem.get(key);
+  if (hit && Date.now() - hit.at < CATALOG_FRESH_MS) return hit.data;
+
+  // Otra instancia pudo haberlo refrescado: mirar Mongo antes de ir a Contífico.
+  if (mongoose.connection.readyState === 1) {
+    const doc = await catalogCol().findOne({ _id: key }).catch(() => null);
+    if (doc && (!hit || doc.at.getTime() > hit.at)) {
+      hit = { at: doc.at.getTime(), data: doc.data };
+      catalogMem.set(key, hit);
+    }
+  }
+  const age = hit ? Date.now() - hit.at : Infinity;
+  if (hit && age < CATALOG_FRESH_MS) return hit.data;
+
+  let refresh = catalogInflight.get(key);
+  if (!refresh) {
+    refresh = (async () => {
+      const data = await load();
+      if (!Array.isArray(data)) throw new Error(`Contífico devolvió un catálogo inválido (${key})`);
+      const at = new Date();
+      catalogMem.set(key, { at: at.getTime(), data });
+      if (mongoose.connection.readyState === 1) {
+        await catalogCol().updateOne({ _id: key }, { $set: { at, data } }, { upsert: true }).catch((e) =>
+          console.warn(`⚠️ No se pudo guardar el catálogo ${key} en Mongo:`, e.message)
+        );
+      }
+      return data;
+    })().finally(() => catalogInflight.delete(key));
+    catalogInflight.set(key, refresh);
+  }
+
+  if (hit && age < CATALOG_MAX_STALE_MS) {
+    refresh.catch(() => {}); // se refresca por detrás; el error ya quedó en el log de getProducts
+    return hit.data;
+  }
+  try {
+    return await refresh;
+  } catch (error) {
+    if (hit) return hit.data; // Contífico caído: mejor el catálogo de hace horas que nada
+    throw error;
+  }
+}
 
 /**
  * Identificación del cliente para la factura, según el ID ingresado.
@@ -81,51 +139,18 @@ export class ContificoService {
     // posId puede estar vacío — se auto-detecta desde /caja/ en el primer uso si no está configurado.
   }
 
-  // --- CACHE POR INSTANCIA (evita que Nicole y Sucree compartan caché) ---
-  private cachedProducts: any[] | null = null;
-  private cachedProductsTime: number = 0;
-  private static readonly PRODUCTS_TTL = 3600 * 1000; // 1 hora
-
-  private cachedCategories: any[] | null = null;
-  private cachedCategoriesTime: number = 0;
-  private static readonly CATEGORIES_TTL = 3600 * 1000; // 1 hora
-
   // POS ID auto-detectado desde la API de Contífico (una vez por instancia)
   private resolvedPosId: string = "";
   private posIdResolved: boolean = false;
 
-  /**
-   * Retorna productos cacheados o frescos si el TTL expiró.
-   */
+  /** Catálogo completo de la cuenta (caché compartido, ver `cachedCatalog`). */
   async getCachedProducts(result_size: number = 2000) {
-    const now = Date.now();
-    if (this.cachedProducts && (now - this.cachedProductsTime < ContificoService.PRODUCTS_TTL)) {
-      return this.cachedProducts;
-    }
-
-    const products = await this.getProducts({ result_size });
-    if (products) {
-      this.cachedProducts = products;
-      this.cachedProductsTime = now;
-    }
-    return products || [];
+    return cachedCatalog(`${this.source}:productos`, () => this.getProducts({ result_size }));
   }
 
-  /**
-   * Retorna categorías cacheadas o frescas si el TTL expiró.
-   */
+  /** Categorías de la cuenta (caché compartido, ver `cachedCatalog`). */
   async getCachedCategories() {
-    const now = Date.now();
-    if (this.cachedCategories && (now - this.cachedCategoriesTime < ContificoService.CATEGORIES_TTL)) {
-      return this.cachedCategories;
-    }
-
-    const categories = await this.getCategories();
-    if (categories) {
-      this.cachedCategories = categories;
-      this.cachedCategoriesTime = now;
-    }
-    return categories || [];
+    return cachedCatalog(`${this.source}:categorias`, () => this.getCategories());
   }
 
   /**
