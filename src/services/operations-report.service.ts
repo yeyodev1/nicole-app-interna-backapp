@@ -183,7 +183,7 @@ export class OperationsReportService {
       for (const [name, qty] of Object.entries(products)) acc[name] = (acc[name] || 0) + qty;
     };
     for (const day of days) {
-      const daySales = await this.posRestock.getDailySales(branch, day);
+      const daySales = await this.posRestock.getDailySales(branch, day, true);
       if (!daySales.available) continue;
       salesAvailable = true;
       add(salesTotals, daySales.products);
