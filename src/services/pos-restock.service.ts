@@ -3,7 +3,7 @@ import { models } from "../models";
 import { getEcuadorNow, getOperationalDateStr } from "../utils/date.utils";
 import { IPOSStockObjective, WeeklyObjectives } from "../models/pos-stock-objective.model";
 import { IPOSDailyEntry } from "../models/pos-daily-entry.model";
-import { ContificoService } from "./contifico.service";
+import { ContificoService, cachedCatalog } from "./contifico.service";
 import { getBranchPuntoCodes } from "../config/contifico-pos.config";
 import { normalizeString } from "../utils/string.utils";
 import { buildContificoCategoryMaps, resolveProduct } from "../utils/contifico-categorias.util";
@@ -53,18 +53,13 @@ export class POSRestockService {
   private docsCache = new Map<string, { at: number; byPos: Map<string, PosSalesAgg> }>();
   private static readonly SALES_CACHE_TTL = 3 * 60 * 1000;
 
-  // Los puntos de emisión casi nunca cambian: 1h de caché en memoria
-  private puntosCache: { at: number; data: any[] } | null = null;
-
+  // Los puntos de emisión casi nunca cambian: mismo caché compartido que el catálogo.
   private async getPuntosEmisionCached(): Promise<any[]> {
-    if (this.puntosCache && Date.now() - this.puntosCache.at < 3600 * 1000) {
-      return this.puntosCache.data;
-    }
-    const data = await this.contifico.getPuntosEmision();
-    if (Array.isArray(data) && data.length > 0) {
-      this.puntosCache = { at: Date.now(), data };
-    }
-    return data;
+    return cachedCatalog("nicole:puntos-emision", async () => {
+      const data = await this.contifico.getPuntosEmision();
+      if (!data.length) throw new Error("Contífico no devolvió puntos de emisión"); // [] = falló: no se guarda
+      return data;
+    }).catch(() => []);
   }
 
   /**
@@ -82,6 +77,18 @@ export class POSRestockService {
     if (cached && Date.now() - cached.at < POSRestockService.SALES_CACHE_TTL) {
       return cached.byPos;
     }
+    // Varias sucursales piden el mismo día a la vez: una sola descarga de Contífico.
+    let pending = this.salesInflight.get(dateStr);
+    if (!pending) {
+      pending = this.loadDaySalesByPos(dateStr).finally(() => this.salesInflight.delete(dateStr));
+      this.salesInflight.set(dateStr, pending);
+    }
+    return pending;
+  }
+
+  private salesInflight = new Map<string, Promise<Map<string, PosSalesAgg>>>();
+
+  private async loadDaySalesByPos(dateStr: string): Promise<Map<string, PosSalesAgg>> {
 
     // Hoy cambia cada rato (5 min); un día pasado casi no cambia (6 h).
     const ecTodayStr = getEcuadorNow().toISOString().split("T")[0];
