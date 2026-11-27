@@ -72,41 +72,53 @@ export class POSRestockService {
    * serverless). Sin la de Mongo, cada instancia nueva de Vercel pagaba los
    * ~15s de Contífico y la pantalla se sentía lenta o daba timeout.
    */
-  private async getDaySalesByPos(dateStr: string): Promise<Map<string, PosSalesAgg>> {
+  private async getDaySalesByPos(dateStr: string, allowStale = false): Promise<Map<string, PosSalesAgg>> {
     const cached = this.docsCache.get(dateStr);
     if (cached && Date.now() - cached.at < POSRestockService.SALES_CACHE_TTL) {
       return cached.byPos;
     }
-    // Varias sucursales piden el mismo día a la vez: una sola descarga de Contífico.
-    let pending = this.salesInflight.get(dateStr);
-    if (!pending) {
-      pending = this.loadDaySalesByPos(dateStr).finally(() => this.salesInflight.delete(dateStr));
-      this.salesInflight.set(dateStr, pending);
-    }
-    return pending;
-  }
-
-  private salesInflight = new Map<string, Promise<Map<string, PosSalesAgg>>>();
-
-  private async loadDaySalesByPos(dateStr: string): Promise<Map<string, PosSalesAgg>> {
 
     // Hoy cambia cada rato (5 min); un día pasado casi no cambia (6 h).
     const ecTodayStr = getEcuadorNow().toISOString().split("T")[0];
     // La jornada abierta puede ser la de ayer entre las 00:00 y las 05:59.
     const jornadaAbierta = dateStr === ecTodayStr || dateStr === getOperationalDateStr();
     const mongoTtl = jornadaAbierta ? 5 * 60 * 1000 : 6 * 3600 * 1000;
-    const cacheCol = mongoose.connection.collection("contifico_sales_cache");
 
+    let stale: Map<string, PosSalesAgg> | null = null;
     try {
-      const doc = await cacheCol.findOne({ date: dateStr });
-      if (doc && doc.fetchedAt && Date.now() - new Date(doc.fetchedAt).getTime() < mongoTtl) {
-        const byPos = this.deserializeByPos(doc.byPos);
+      const doc = await mongoose.connection.collection("contifico_sales_cache").findOne({ date: dateStr });
+      const age = doc?.fetchedAt ? Date.now() - new Date(doc.fetchedAt).getTime() : Infinity;
+      if (age < mongoTtl) {
+        const byPos = this.deserializeByPos(doc!.byPos);
         this.docsCache.set(dateStr, { at: Date.now(), byPos });
         return byPos;
       }
+      if (allowStale && age < POSRestockService.SALES_MAX_STALE_MS) stale = this.deserializeByPos(doc!.byPos);
     } catch (err: any) {
       console.warn(`⚠️ [POS] Caché Mongo de ventas ilegible (${dateStr}): ${err?.message || err}`);
     }
+
+    // Varias sucursales piden el mismo día a la vez: una sola descarga de Contífico.
+    let pending = this.salesInflight.get(dateStr);
+    if (!pending) {
+      pending = this.loadDaySalesByPos(dateStr).finally(() => this.salesInflight.delete(dateStr));
+      this.salesInflight.set(dateStr, pending);
+    }
+    // Reporte de Operaciones: responde lo guardado (≤ 30 min) y refresca por detrás,
+    // así nadie espera los ~15 s de Contífico. El formulario de cierre sigue pidiendo fresco.
+    // shortcut: el refresco corre tras la respuesta; si Vercel congela la instancia, lo termina la siguiente visita.
+    if (stale) {
+      pending.catch(() => {});
+      return stale;
+    }
+    return pending;
+  }
+
+  private salesInflight = new Map<string, Promise<Map<string, PosSalesAgg>>>();
+  private static readonly SALES_MAX_STALE_MS = 30 * 60 * 1000;
+
+  private async loadDaySalesByPos(dateStr: string): Promise<Map<string, PosSalesAgg>> {
+    const cacheCol = mongoose.connection.collection("contifico_sales_cache");
 
     const [y, m, d] = dateStr.split("-");
     const fecha = `${d}/${m}/${y}`; // DD/MM/YYYY
@@ -208,7 +220,7 @@ export class POSRestockService {
    * tiene punto de emisión mapeado o Contífico falla: la pantalla nunca se
    * bloquea por esto.
    */
-  async getDailySales(branch: string, dateStr?: string) {
+  async getDailySales(branch: string, dateStr?: string, allowStale = false) {
     const date = dateStr || getOperationalDateStr();
     const empty = { branch, date, available: false, puntos: [] as string[], products: {} as Record<string, number>, notasCredito: [] as PosCreditNote[] };
 
@@ -227,7 +239,7 @@ export class POSRestockService {
 
       if (targets.length === 0) return empty;
 
-      const byPos = await this.getDaySalesByPos(date);
+      const byPos = await this.getDaySalesByPos(date, allowStale);
       const objectives = await models.posStockObjectives.find({ branch: branchMatch(branch) }).lean();
 
       const sumFor = (puntos: any[]) => {
